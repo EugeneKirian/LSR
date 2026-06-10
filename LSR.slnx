@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="LSR/LSR.vcxproj" Id="f6e2fb39-ddee-493c-8f50-aa07d69ee121" />
+</Solution>

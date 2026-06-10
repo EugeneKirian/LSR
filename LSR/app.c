@@ -1,0 +1,240 @@
+#include "app.h"
+#include "render.h"
+#include "scene.h"
+#include "surface.h"
+
+#include <stdlib.h>
+
+struct app {
+    scene*              scene;
+    render*             render;
+    surface*            surface;
+    CRITICAL_SECTION    lock;
+};
+
+static int app_allocate(app** outObj) {
+    if (outObj == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    app* a = (app*)malloc(sizeof(app));
+    if (a == NULL) {
+        return LSRERR_OUT_OF_MEMORY;
+    }
+
+    ZeroMemory(a, sizeof(app));
+
+    *outObj = a;
+
+    return LSRERR_OK;
+}
+
+int app_create(app** outObj) {
+    if (outObj == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    app* a = NULL;
+    int result = app_allocate(&a);
+    if (result != LSRERR_OK) {
+        return result;
+    }
+
+    if ((result = render_create(&a->render)) != LSRERR_OK) {
+        app_release(a);
+        return result;
+    }
+
+    InitializeCriticalSection(&a->lock);
+
+    *outObj = a;
+
+    return LSRERR_OK;
+}
+
+void app_release(app* a) {
+    if (a != NULL) {
+        DeleteCriticalSection(&a->lock);
+
+        if (a->scene != NULL) {
+            scene_release(a->scene);
+        }
+
+        if (a->render != NULL) {
+            render_release(a->render);
+        }
+
+        if (a->surface != NULL) {
+            surface_release(a->surface);
+        }
+    }
+}
+
+int app_create_surface(app* a, HDC hdc, int w, int h) {
+    if (a == NULL || hdc == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (w < 0 || h < 0) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    surface* s = NULL;
+    int result = surface_create(hdc, w, h, &s);
+    if (result != LSRERR_OK) {
+        return result;
+    }
+
+    surface_release(InterlockedExchangePointer(&a->surface, s));
+
+    return LSRERR_OK;
+}
+
+int app_load_scene(app* a, const char* path) {
+    if (a == NULL || path == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    scene* s = NULL;
+    int result = scene_create(path, &s);
+    if (result != LSRERR_OK) {
+        return result;
+    }
+
+    scene_release(InterlockedExchangePointer(&a->scene, s));
+
+    return LSRERR_OK;
+}
+
+int app_resize_surface(app* a, int w, int h) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (w < 0 || h < 0) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (a->surface == NULL) {
+        return LSRERR_INVALID_CALL;
+    }
+
+    EnterCriticalSection(&a->lock);
+
+    int result = surface_resize(a->surface, w, h);
+
+    if (result == LSRERR_OK) {
+        render_viewport vp;
+        vp.x = 0;
+        vp.y = 0;
+        vp.width = w;
+        vp.height = h;
+        vp.min = 0.0f;
+        vp.max = 1.0f;
+        if ((result = render_set_viewport(a->render, &vp)) == LSRERR_OK){
+            result = render_set_render_target(a->render, a->surface);
+        }
+    }
+
+    LeaveCriticalSection(&a->lock);
+
+    return result;
+}
+
+int app_blt_surface(app* a, const RECT* rect, HDC hdc, const POINT* point) {
+    if (a == NULL || hdc == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (a->surface == NULL) {
+        return LSRERR_INVALID_CALL;
+    }
+    
+    EnterCriticalSection(&a->lock);
+
+    const int result = surface_blt(a->surface, rect, hdc, point);
+
+    LeaveCriticalSection(&a->lock);
+
+    return result;
+}
+
+int app_execute(app* a, f64 time) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (a->scene == NULL || a->surface == NULL) {
+        return LSRERR_INVALID_CALL;
+    }
+
+    render* r = a->render;
+    scene* s = a->scene;
+
+    EnterCriticalSection(&a->lock);
+
+    // TODO fog
+    // TODO mode
+    // TODO depth buffer
+
+    // TODO error handling vv
+    int result = LSRERR_OK;
+
+    if ((result = render_start(r)) == LSRERR_OK) {
+        const size_t object_count = s->objects.count;
+        for (size_t i = 0; i < object_count; i++) {
+            const mg* m = s->objects.meshes[i];
+            const size_t mesh_count = m->count;
+            for (size_t ii = 0; ii < mesh_count; ii++) {
+                // Texture
+                const texture* tex = NULL;
+                const char* texture_name = m->meshes[ii]->texture;
+                if (texture_name != NULL) {
+                    const size_t texture_count = s->assets.count;
+                    for (size_t iii = 0; iii < texture_count; iii++) {
+                        if (strcmp(texture_name, s->assets.textures[iii]->name) == 0) {
+                            tex = s->assets.textures[iii];
+                            break;
+                        }
+                    }
+                }
+
+                if ((result = render_set_texture(r, tex)) == LSRERR_OK) {
+
+                    // TODO set matrixes for world, view, and projection
+
+                    // Object
+                    result = render_draw(r, m->meshes[ii]->vertexes,
+                        m->meshes[ii]->indexes, m->meshes[ii]->index_count);
+                }
+            }
+        }
+
+        render_end(r);
+    }
+    // TODO error handling ^^
+
+    LeaveCriticalSection(&a->lock);
+
+    return result;
+}
+
+int app_key_down(app* a, int key) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    // TODO
+
+    return LSRERR_OK;
+}
+
+int app_key_up(app* a, int key) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    // TODO
+
+    return LSRERR_OK;
+}
