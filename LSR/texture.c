@@ -155,3 +155,22 @@ int texture_blt(texture* t, const texture* image) {
 
     return LSRERR_OK;
 }
+
+int texture_draw_point(texture* t, int x, int y, u32 color) {
+    if (t == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (x < 0 || t->width <= x) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (y < 0 || t->height <= y) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    u32* pixels = (u32*)(t->data + y * t->width * sizeof(u32));
+    pixels[x] = color;
+
+    return LSRERR_OK;
+}

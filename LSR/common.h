@@ -35,7 +35,7 @@ typedef struct vertex {
     f32x3 position;
     f32x3 normal;
     u32 color;
-    f32x3 uv;
+    f32x2 uv;
 } vertex;
 
 // Direct3D-style row-major matrix
@@ -61,4 +61,7 @@ int f32x3_cross_product(const f32x3* v1, const f32x3* v2, f32x3* cp);
 int f32x3_normalize(const f32x3* v, f32x3* n);
 int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3* n);
 
+int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result);
+
 int f32m4_identity(f32m4* m);
+int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result);

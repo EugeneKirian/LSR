@@ -14,3 +14,5 @@ void texture_release(texture* t);
 int texture_load_bitmap(texture* t, const bmp* image);
 int texture_set_color(texture* t, const RECT* rect, u32 color);
 int texture_blt(texture* t, const texture* image);
+
+int texture_draw_point(texture* t, int x, int y, u32 color);

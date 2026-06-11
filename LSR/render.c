@@ -27,6 +27,8 @@ struct render {
     texture* surface, *depth;
 };
 
+#define RENDER_MAX_ARENA_SIZE (4 * RENDER_MAX_VERTEX_COUNT * (sizeof(rv) + sizeof(int)))
+
 static int is_viewport_valid(const render_viewport* vp, int* valid) {
     if (vp == NULL || valid == NULL) {
         return LSRERR_INVALID_ARGUMENT;
@@ -50,7 +52,7 @@ static int render_allocate(render** outObj) {
 
     ZeroMemory(r, sizeof(render));
 
-    r->arena = arena_create(2 * RENDER_MAX_VERTEX_COUNT * (sizeof(rv) + sizeof(int)));
+    r->arena = arena_create(RENDER_MAX_ARENA_SIZE);
     if (r->arena == NULL) {
         free(r);
         return LSRERR_OUT_OF_MEMORY;
@@ -269,8 +271,76 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
         return LSRERR_INVALID_CALL;
     }
 
-    // TODO draw...
-    texture_blt(r->surface, r->current);
+    arena_clear(r->arena);
+
+    const size_t size = sizeof(rv) * index_count;
+    rv* ndc = (rv*)arena_allocate(r->arena, size);
+    if (ndc == NULL) {
+        return LSRERR_OUT_OF_MEMORY;
+    }
+
+    ZeroMemory(ndc, size);
+
+    // Prepare World-View-Projection Matrix
+    f32m4 wv; // World-View Matrix
+    ZeroMemory(&wv, sizeof(f32m4));
+
+    int result = f32m4_multiply(&r->matrixes[RENDER_MATRIX_WORLD],
+        &r->matrixes[RENDER_MATRIX_VIEW], &wv);
+    if (result != LSRERR_OK) {
+        return result;
+    }
+
+    f32m4 wvp; // World-View-Projection Matrix
+    ZeroMemory(&wvp, sizeof(f32m4));
+
+    if ((result = f32m4_multiply(&wv, &r->matrixes[RENDER_MATRIX_PROJECTION], &wvp)) != LSRERR_OK) {
+        return result;
+    }
+
+    // Transform vertex positions to NDC coordinates
+    for (size_t i = 0; i < index_count; i++) {
+        const vertex* in = &vertexes[indexes[i]];
+        rv* out = &ndc[i];
+
+        f32x4 v;
+        v.x = in->position.x;
+        v.y = in->position.y;
+        v.z = in->position.z;
+        v.w = 1.0;
+
+        if ((result = f32x4_multiply_f32m4(&v, &wvp, &out->position)) != LSRERR_OK) {
+            return result;
+        }
+
+        out->normal = in->normal;
+        out->color = in->color;
+        out->uv = in->uv;
+    }
+
+    // Perspective divide
+    for (size_t i = 0; i < index_count; i++) {
+        rv* v = &ndc[i];
+
+        v->position.x /= v->position.w;
+        v->position.y /= v->position.w;
+        v->position.z /= v->position.w;
+    }
+
+    // Transform vertexes NDC coordinates to "screen" coordinates
+    const int width = r->surface->width;
+    const int height = r->surface->height;
+
+    for (size_t i = 0; i < index_count; i++) {
+        rv* v = &ndc[i];
+
+        const int x = (int)((f32)(width - 1) * ((v->position.x + 1.0f) / 2.0f));
+        const int y = (int)((f32)(height - 1) * ((1.0f - v->position.y) / 2.0f));
+
+        if ((result = texture_draw_point(r->surface, x, y, 0xFFFF0000)) != LSRERR_OK) {
+            return result;
+        }
+    }
 
     return LSRERR_OK;
 }

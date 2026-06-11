@@ -59,6 +59,18 @@ int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3*
     return result;
 }
 
+int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result) {
+    if (v == NULL || m == NULL || result == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    result->x = v->x * m->m4x4[0][0] + v->y * m->m4x4[1][0] + v->z * m->m4x4[2][0] + v->w * m->m4x4[3][0];
+    result->y = v->x * m->m4x4[0][1] + v->y * m->m4x4[1][1] + v->z * m->m4x4[2][1] + v->w * m->m4x4[3][1];
+    result->z = v->x * m->m4x4[0][2] + v->y * m->m4x4[1][2] + v->z * m->m4x4[2][2] + v->w * m->m4x4[3][2];
+    result->w = v->x * m->m4x4[0][3] + v->y * m->m4x4[1][3] + v->z * m->m4x4[2][3] + v->w * m->m4x4[3][3];
+
+    return LSRERR_OK;
+}
 
 int f32m4_identity(f32m4* m) {
     if (m == NULL) {
@@ -70,7 +82,26 @@ int f32m4_identity(f32m4* m) {
     m->m4x4[0][0] = 1.0f;
     m->m4x4[1][1] = 1.0f;
     m->m4x4[2][2] = 1.0f;
-    m->m4x4[3][4] = 1.0f;
+    m->m4x4[3][3] = 1.0f;
+
+    return LSRERR_OK;
+}
+
+int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result) {
+    if (m1 == NULL || m2 == NULL || result == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            f32 sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += m1->m16[r * 4 + k] * m2->m16[k * 4 + c];
+            }
+
+            result->m16[r * 4 + c] = sum;
+        }
+    }
 
     return LSRERR_OK;
 }
