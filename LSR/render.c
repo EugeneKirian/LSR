@@ -12,6 +12,8 @@ typedef struct rv {
     f32x2 uv;
 } rv;
 
+#define RENDER_MAX_ARENA_SIZE (4 * RENDER_MAX_VERTEX_COUNT * (sizeof(rv) + sizeof(int)))
+
 struct render {
     int active;
     arena* arena;
@@ -26,8 +28,6 @@ struct render {
     render_viewport viewport;
     texture* surface, *depth;
 };
-
-#define RENDER_MAX_ARENA_SIZE (4 * RENDER_MAX_VERTEX_COUNT * (sizeof(rv) + sizeof(int)))
 
 static int is_viewport_valid(const render_viewport* vp, int* valid) {
     if (vp == NULL || valid == NULL) {
@@ -73,8 +73,6 @@ int render_create(render** outObj) {
     if (result != LSRERR_OK) {
         return result;
     }
-
-    r->settings.mode = RENDER_DRAW_MODE_POINTS; // TODO
 
     for (size_t i = 0; i < RENDER_MATRIX_COUNT; i++) {
         if ((result = f32m4_identity(&r->matrixes[i])) != LSRERR_OK) {
@@ -192,7 +190,7 @@ int render_set_viewport(render* r, const render_viewport* vp) {
 
     CopyMemory(&r->viewport, vp, sizeof(render_viewport));
 
-    return LSRERR_OK;
+    return f32m4_projection(&r->matrixes[RENDER_MATRIX_PROJECTION], w, h, vp->min, vp->max);
 }
 
 int render_set_render_target(render* r, surface* s) {
@@ -240,9 +238,6 @@ int render_start(render* r) {
 
     r->active = TRUE;
 
-    texture_set_color(r->surface, NULL, 0x00000000);
-    texture_set_color(r->depth, NULL, 0x7F800000); // Positive Infinity
-
     return LSRERR_OK;
 }
 
@@ -262,6 +257,35 @@ int render_end(render* r) {
     return result;
 }
 
+int render_clear(render* r, u32 color) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (!r->active) {
+        return LSRERR_INVALID_CALL;
+    }
+
+    texture_set_color(r->surface, NULL, color);
+    texture_set_color(r->depth, NULL, 0x7F800000); // Positive Infinity
+
+    return LSRERR_OK;
+}
+
+static int is_outside_plane(rv* v, size_t plane_index) { // TODO name FRUSTRUM
+    // TODO refactor
+    switch (plane_index) {
+    case 0: return (v->position.x < -v->position.w); // Left
+    case 1: return (v->position.x > v->position.w); // Right
+    case 2: return (v->position.y < -v->position.w); // Bottom
+    case 3: return (v->position.y > v->position.w); // Top
+    case 4: return (v->position.z < 0.0f); // Near
+    case 5: return (v->position.z > v->position.w); // Far
+    }
+
+    return 0;
+}
+
 int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t index_count) {
     if (r == NULL || vertexes == NULL || indexes == NULL) {
         return LSRERR_INVALID_ARGUMENT;
@@ -273,16 +297,25 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
 
     arena_clear(r->arena);
 
-    const size_t size = sizeof(rv) * index_count;
-    rv* ndc = (rv*)arena_allocate(r->arena, size);
-    if (ndc == NULL) {
+    size_t element_count = 0, vertex_count = 0;
+    size_t max_element_count = 0, max_vertex_count = 0;
+    switch (r->settings.mode) {
+    case RENDER_DRAW_MODE_POINTS: {
+        max_element_count = index_count;
+        max_vertex_count = index_count;
+    } break;
+    }
+
+    const size_t size = sizeof(rv) * 2 * max_vertex_count;
+    rv* render_vertexes = (rv*)arena_allocate(r->arena, size);
+    if (render_vertexes == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    ZeroMemory(ndc, size);
+    ZeroMemory(render_vertexes, size);
 
-    // Prepare World-View-Projection Matrix
-    f32m4 wv; // World-View Matrix
+    // World-View Matrix
+    f32m4 wv;
     ZeroMemory(&wv, sizeof(f32m4));
 
     int result = f32m4_multiply(&r->matrixes[RENDER_MATRIX_WORLD],
@@ -291,55 +324,86 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
         return result;
     }
 
-    f32m4 wvp; // World-View-Projection Matrix
+    // World-View-Projection Matrix
+    f32m4 wvp;
     ZeroMemory(&wvp, sizeof(f32m4));
 
     if ((result = f32m4_multiply(&wv, &r->matrixes[RENDER_MATRIX_PROJECTION], &wvp)) != LSRERR_OK) {
         return result;
     }
 
-    // Transform vertex positions to NDC coordinates
-    for (size_t i = 0; i < index_count; i++) {
-        const vertex* in = &vertexes[indexes[i]];
-        rv* out = &ndc[i];
+    // Transform vertex positions to clip space
+    for (size_t i = 0; i < max_element_count; i++) {
+        switch (r->settings.mode) {
+        case RENDER_DRAW_MODE_POINTS: {
+            const vertex* in = &vertexes[indexes[i]];
+            rv* out = &render_vertexes[vertex_count];
 
-        f32x4 v;
-        v.x = in->position.x;
-        v.y = in->position.y;
-        v.z = in->position.z;
-        v.w = 1.0;
+            f32x4 v;
+            v.x = in->position.x;
+            v.y = in->position.y;
+            v.z = in->position.z;
+            v.w = 1.0;
 
-        if ((result = f32x4_multiply_f32m4(&v, &wvp, &out->position)) != LSRERR_OK) {
-            return result;
+            if ((result = f32x4_multiply_f32m4(&v, &wvp, &out->position)) != LSRERR_OK) {
+                return result;
+            }
+
+            // If clipping enabled
+            // TODO clipping setting
+            int outside = FALSE;
+            for (size_t p = 0; p < 6 /* TODO */; p++) {
+                if (outside = is_outside_plane(out, p)) {
+                    break;
+                }
+            }
+
+            if (!outside) {
+                element_count++;
+                vertex_count++;
+            }
+
+            out->normal = in->normal;
+            out->color = in->color;
+            out->uv = in->uv;
+        } break;
         }
-
-        out->normal = in->normal;
-        out->color = in->color;
-        out->uv = in->uv;
     }
 
-    // Perspective divide
-    for (size_t i = 0; i < index_count; i++) {
-        rv* v = &ndc[i];
+    // Perspective divide: Clip space -> NDC space
+    for (size_t i = 0; i < element_count; i++) {
+        switch (r->settings.mode) {
+        case RENDER_DRAW_MODE_POINTS: {
+            rv* v = &render_vertexes[i];
 
-        v->position.x /= v->position.w;
-        v->position.y /= v->position.w;
-        v->position.z /= v->position.w;
+            v->position.x /= v->position.w;
+            v->position.y /= v->position.w;
+            v->position.z /= v->position.w;
+        } break;
+        }
     }
 
-    // Transform vertexes NDC coordinates to "screen" coordinates
-    const int width = r->surface->width;
-    const int height = r->surface->height;
+    // Transform vertexes NDC coordinates to "screen" coordinates.
+    // And adjusting to [0, ...) space, so that there are no pixels outside target texture.
+    texture* s = r->surface;
+    const int width = s->width - 1;
+    const int height = s->height - 1;
 
-    for (size_t i = 0; i < index_count; i++) {
-        rv* v = &ndc[i];
+    switch (r->settings.mode) {
+    case RENDER_DRAW_MODE_POINTS: {
+        for (size_t i = 0; i < vertex_count; i++) {
+            rv* v = &render_vertexes[i];
 
-        const int x = (int)((f32)(width - 1) * ((v->position.x + 1.0f) / 2.0f));
-        const int y = (int)((f32)(height - 1) * ((1.0f - v->position.y) / 2.0f));
+            const int x = (int)((f32)width * ((v->position.x + 1.0f) / 2.0f));
+            const int y = (int)((f32)height * ((1.0f - v->position.y) / 2.0f));
 
-        if ((result = texture_draw_point(r->surface, x, y, 0xFFFF0000)) != LSRERR_OK) {
-            return result;
-        }
+            if (x >= 0 && x < s->width && y >= 0 && y < s->height) {
+                if ((result = texture_draw_point(r->surface, x, y, v->color)) != LSRERR_OK) {
+                    return result;
+                }
+            }
+        } break;
+    }
     }
 
     return LSRERR_OK;

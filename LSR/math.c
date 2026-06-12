@@ -2,7 +2,20 @@
 
 #include "common.h"
 
+#define _USE_MATH_DEFINES
 #include <math.h>
+
+int f32x3_add_f32x3(f32x3* v, const f32x3* value) {
+    if (v == NULL || value == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    v->x += value->x;
+    v->y += value->y;
+    v->z += value->z;
+
+    return LSRERR_OK;
+}
 
 int f32x3_cross_product(const f32x3* v1, const f32x3* v2, f32x3* cp) {
     if (v1 == NULL || v2 == NULL || cp == NULL) {
@@ -102,6 +115,24 @@ int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result) {
             result->m16[r * 4 + c] = sum;
         }
     }
+
+    return LSRERR_OK;
+}
+
+int f32m4_projection(f32m4* m, int w, int h, f32 min, f32 max) {
+    if (m == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    const f32 a = (f32)w / (f32)h;
+    const f32 fov = 90.0f * (f32)(M_PI / 180.0); // 90 degrees
+
+    const f32 tan_fov = tanf(fov / 2.0f);
+
+    m->m4x4[0][0] = 1.0f / (a * tan_fov); m->m4x4[0][1] = 0.0f; m->m4x4[0][2] = 0.0f;m->m4x4[0][3] = 0.0f;
+    m->m4x4[1][0] = 0.0f; m->m4x4[1][1] = 1.0f / tan_fov; m->m4x4[1][2] = 0.0f;m->m4x4[1][3] = 0.0f;
+    m->m4x4[2][0] = 0.0f; m->m4x4[2][1] = 0.0f; m->m4x4[2][2] = max / (max - min); m->m4x4[2][3] = 1.0f;
+    m->m4x4[3][0] = 0.0f; m->m4x4[3][1] = 0.0f; m->m4x4[3][2] = -(min * max) / (max - min); m->m4x4[3][3] = 0.0f;
 
     return LSRERR_OK;
 }

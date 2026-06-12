@@ -54,4 +54,5 @@ int render_set_depth_buffer(render* r, render_depth_buffer depth);
 int render_start(render* r);
 int render_end(render* r);
 
+int render_clear(render* r, u32 color);
 int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t index_count);

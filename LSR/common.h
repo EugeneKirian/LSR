@@ -46,10 +46,14 @@ typedef struct f32m4 {
     };
 } f32m4;
 
+typedef struct euler {
+    f32 roll, pitch, yaw;
+} euler;
+
 typedef struct transform {
     f32x3 scale;
     f32x3 position;
-    f32x3 rotation; // Euler Angles
+    euler rotation;
 } transform;
 
 typedef struct aabb {
@@ -57,6 +61,20 @@ typedef struct aabb {
     f32x3 max;
 } aabb;
 
+#define DIRECTION_COUNT  6
+
+typedef enum direction {
+    DIRECTION_NONE          = 0x0,
+    DIRECTION_FORWARD       = 0x1,
+    DIRECTION_BACKWARD      = 0x2,
+    DIRECTION_LEFT          = 0x4,
+    DIRECTION_RIGHT         = 0x8,
+    DIRECTION_UPWARD        = 0x10,
+    DIRECTION_DOWNWARD      = 0x20,
+    DIRECTION_FORCE_DWORD   = 0x7FFFFFFF
+} direction;
+
+int f32x3_add_f32x3(f32x3* v, const f32x3* value);
 int f32x3_cross_product(const f32x3* v1, const f32x3* v2, f32x3* cp);
 int f32x3_normalize(const f32x3* v, f32x3* n);
 int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3* n);
@@ -65,3 +83,4 @@ int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result);
 
 int f32m4_identity(f32m4* m);
 int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result);
+int f32m4_projection(f32m4* m, int w, int h, f32 min, f32 max);

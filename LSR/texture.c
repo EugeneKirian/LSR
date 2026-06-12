@@ -161,11 +161,7 @@ int texture_draw_point(texture* t, int x, int y, u32 color) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    if (x < 0 || t->width <= x) {
-        return LSRERR_INVALID_ARGUMENT;
-    }
-
-    if (y < 0 || t->height <= y) {
+    if (x < 0 || t->width <= x || y < 0 || t->height <= y) {
         return LSRERR_INVALID_ARGUMENT;
     }
 

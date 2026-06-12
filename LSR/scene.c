@@ -137,7 +137,7 @@ int scene_create(const char* path, scene** outObj) {
         return result;
     }
 
-    // Load mesh textures
+    // Load textures
     for (size_t i = 0; i < mesh->count; i++) {
         const char* file = NULL;
         const char* name = NULL;
@@ -183,9 +183,7 @@ int scene_create(const char* path, scene** outObj) {
         f32x3 center;
         center.x = (bounds.min.x + t.x + bounds.max.x + t.x) / 2.0f;
         center.y = (bounds.min.y + t.y + bounds.max.x + t.y) / 2.0f;
-
-        const f32 zz = (bounds.min.z + t.z + bounds.max.z + t.z);
-        center.z = zz / 2.0f - zz;
+        center.z = -2.0f * bounds.max.z;
 
         // Camera
         if ((result = camera_create(&center, &s->camera)) != LSRERR_OK) {

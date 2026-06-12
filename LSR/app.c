@@ -10,6 +10,7 @@ struct app {
     render*             render;
     surface*            surface;
     CRITICAL_SECTION    lock;
+    direction           movement;
 };
 
 static int app_allocate(app** outObj) {
@@ -171,48 +172,57 @@ int app_execute(app* a, f64 time) {
     render* r = a->render;
     scene* s = a->scene;
 
+    // Move camera
+    int result = camera_move(s->camera, a->movement, (f32)time);
+    if (result != LSRERR_OK) {
+        return result;
+    }
+
     EnterCriticalSection(&a->lock);
 
     // TODO fog
     // TODO mode
     // TODO depth buffer
 
-    // TODO error handling vv
-    int result = LSRERR_OK;
+    f32m4 view;
+    if ((result = camera_get_matrix(s->camera, &view)) == LSRERR_OK) {
+        if ((result = render_set_matrix(r, RENDER_MATRIX_VIEW, &view)) == LSRERR_OK) {
+            if ((result = render_start(r)) == LSRERR_OK) {
+                if ((result = render_clear(r, 0xFF636363)) == LSRERR_OK) {
+                    const size_t object_count = s->objects.count;
+                    for (size_t i = 0; i < object_count; i++) {
+                        const mg* m = s->objects.meshes[i];
+                        const size_t mesh_count = m->count;
+                        for (size_t ii = 0; ii < mesh_count; ii++) {
+                            // Texture
+                            const texture* tex = NULL;
+                            const char* texture_name = m->meshes[ii]->texture;
+                            if (texture_name != NULL) {
+                                const size_t texture_count = s->assets.count;
+                                for (size_t iii = 0; iii < texture_count; iii++) {
+                                    if (strcmp(texture_name, s->assets.textures[iii]->name) == 0) {
+                                        tex = s->assets.textures[iii];
+                                        break;
+                                    }
+                                }
+                            }
 
-    if ((result = render_start(r)) == LSRERR_OK) {
-        const size_t object_count = s->objects.count;
-        for (size_t i = 0; i < object_count; i++) {
-            const mg* m = s->objects.meshes[i];
-            const size_t mesh_count = m->count;
-            for (size_t ii = 0; ii < mesh_count; ii++) {
-                // Texture
-                const texture* tex = NULL;
-                const char* texture_name = m->meshes[ii]->texture;
-                if (texture_name != NULL) {
-                    const size_t texture_count = s->assets.count;
-                    for (size_t iii = 0; iii < texture_count; iii++) {
-                        if (strcmp(texture_name, s->assets.textures[iii]->name) == 0) {
-                            tex = s->assets.textures[iii];
-                            break;
+                            if ((result = render_set_texture(r, tex)) == LSRERR_OK) {
+
+                                // TODO set world matrix
+
+                                // Object
+                                result = render_draw(r, m->meshes[ii]->vertexes,
+                                    m->meshes[ii]->indexes, m->meshes[ii]->index_count);
+                            }
                         }
                     }
-                }
 
-                if ((result = render_set_texture(r, tex)) == LSRERR_OK) {
-
-                    // TODO set matrixes for world, view, and projection
-
-                    // Object
-                    result = render_draw(r, m->meshes[ii]->vertexes,
-                        m->meshes[ii]->indexes, m->meshes[ii]->index_count);
+                    result = render_end(r);
                 }
             }
         }
-
-        render_end(r);
     }
-    // TODO error handling ^^
 
     LeaveCriticalSection(&a->lock);
 
@@ -224,7 +234,30 @@ int app_key_down(app* a, int key) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    // TODO
+    switch (key) {
+    case 'W':
+    case VK_UP: {
+        a->movement |= DIRECTION_FORWARD;
+    } break;
+    case 'S':
+    case VK_DOWN: {
+        a->movement |= DIRECTION_BACKWARD;
+    } break;
+    case 'D':
+    case VK_RIGHT: {
+        a->movement |= DIRECTION_RIGHT;
+    } break;
+    case 'A':
+    case VK_LEFT: {
+        a->movement |= DIRECTION_LEFT;
+    } break;
+    case 'Q': {
+        a->movement |= DIRECTION_UPWARD;
+    } break;
+    case 'E': {
+        a->movement |= DIRECTION_DOWNWARD;
+    } break;
+    }
 
     return LSRERR_OK;
 }
@@ -234,7 +267,30 @@ int app_key_up(app* a, int key) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    // TODO
+    switch (key) {
+    case 'W':
+    case VK_UP: {
+        a->movement &= (~DIRECTION_FORWARD);
+    } break;
+    case 'S':
+    case VK_DOWN: {
+        a->movement &= (~DIRECTION_BACKWARD);
+    } break;
+    case 'D':
+    case VK_RIGHT: {
+        a->movement &= (~DIRECTION_RIGHT);
+    } break;
+    case 'A':
+    case VK_LEFT: {
+        a->movement &= (~DIRECTION_LEFT);
+    } break;
+    case 'Q': {
+        a->movement &= (~DIRECTION_UPWARD);
+    } break;
+    case 'E': {
+        a->movement &= (~DIRECTION_DOWNWARD);
+    } break;
+    }
 
     return LSRERR_OK;
 }
