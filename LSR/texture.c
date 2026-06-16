@@ -90,12 +90,11 @@ int texture_load_bitmap(texture* t, const bmp* image) {
     const int w = t->width < image_width ? t->width : image_width;
     const int h = t->height < image_height ? t->height : image_height;
 
-    // Fli the image and convert pixels to 32-bit RGBA
-    const char* start = image->data + image_width * (image_height - 1) * sizeof(RGBTRIPLE);
+    //Convert image pixels to 32-bit RGBA
     for (int x = 0; x < h; x++) {
         u32* dst = (u32*)(t->data + w * x * sizeof(u32));
         const RGBTRIPLE* src =
-            (RGBTRIPLE*)(start - image_width * x * sizeof(RGBTRIPLE));
+            (RGBTRIPLE*)(image->data + image_width * x * sizeof(RGBTRIPLE));
         for (int xx = 0; xx < w; xx++) {
             dst[xx] = (0xFF << 24) | (src[xx].rgbtRed << 16)
                 | (src[xx].rgbtGreen << 8) | src[xx].rgbtBlue;
@@ -156,7 +155,22 @@ int texture_blt(texture* t, const texture* image) {
     return LSRERR_OK;
 }
 
-int texture_draw_point(texture* t, int x, int y, u32 color) {
+int texture_get_point_color(const texture* t, int x, int y, u32* color) {
+    if (t == NULL || color == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (x < 0 || t->width <= x || y < 0 || t->height <= y) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    const u32* pixels = (u32*)(t->data + y * t->width * sizeof(u32));
+    *color = pixels[x];
+
+    return LSRERR_OK;
+}
+
+int texture_set_point_color(texture* t, int x, int y, u32 color) {
     if (t == NULL) {
         return LSRERR_INVALID_ARGUMENT;
     }
@@ -167,6 +181,36 @@ int texture_draw_point(texture* t, int x, int y, u32 color) {
 
     u32* pixels = (u32*)(t->data + y * t->width * sizeof(u32));
     pixels[x] = color;
+
+    return LSRERR_OK;
+}
+
+int texture_get_point_depth(const texture* t, int x, int y, f32* depth) {
+    if (t == NULL || depth == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (x < 0 || t->width <= x || y < 0 || t->height <= y) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    const f32* pixels = (f32*)(t->data + y * t->width * sizeof(f32));
+    *depth = pixels[x];
+
+    return LSRERR_OK;
+}
+
+int texture_set_point_depth(texture* t, int x, int y, f32 depth) {
+    if (t == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (x < 0 || t->width <= x || y < 0 || t->height <= y) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    f32* pixels = (f32*)(t->data + y * t->width * sizeof(f32));
+    pixels[x] = depth;
 
     return LSRERR_OK;
 }

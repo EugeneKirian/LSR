@@ -67,6 +67,28 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         app_key_up(state.app, (int)wp);
         return 0;
     } break;
+    case WM_MOUSEMOVE: {
+        POINT point;
+        GetCursorPos(&point);
+        ScreenToClient(hwnd, &point);
+        app_mouse_move(state.app, &point);
+    } break;
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN: {
+        if (msg == WM_RBUTTONDOWN) {
+            SetCapture(hwnd);
+        }
+        app_mouse_down(state.app,
+            msg == WM_LBUTTONDOWN ? MOUSE_BUTTON_LEFT : MOUSE_BUTTON_RIGHT);
+    } break;
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP: {
+        if (msg == WM_RBUTTONUP) {
+            ReleaseCapture();
+        }
+        app_mouse_up(state.app,
+            msg == WM_LBUTTONUP ? MOUSE_BUTTON_LEFT : MOUSE_BUTTON_RIGHT);
+    } break;
     }
 
     return DefWindowProcA(hwnd, msg, wp, lp);
@@ -131,7 +153,7 @@ int main(int argc, char** argv) {
     LARGE_INTEGER start, end, freq;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&start);
-    QueryPerformanceCounter(&end);
+    end.QuadPart = start.QuadPart;
 
     while (!state.exit) {
         while (PeekMessageA(&msg, state.hwnd, 0, 0, PM_REMOVE)) {
@@ -165,6 +187,7 @@ int main(int argc, char** argv) {
             }
         }
 
+        end.QuadPart = start.QuadPart;
         QueryPerformanceCounter(&start);
         InvalidateRect(state.hwnd, NULL, FALSE);
     }

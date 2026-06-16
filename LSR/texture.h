@@ -15,4 +15,8 @@ int texture_load_bitmap(texture* t, const bmp* image);
 int texture_set_color(texture* t, const RECT* rect, u32 color);
 int texture_blt(texture* t, const texture* image);
 
-int texture_draw_point(texture* t, int x, int y, u32 color);
+int texture_get_point_color(const texture* t, int x, int y, u32* color);
+int texture_set_point_color(texture* t, int x, int y, u32 color);
+
+int texture_get_point_depth(const texture* t, int x, int y, f32* depth);
+int texture_set_point_depth(texture* t, int x, int y, f32 depth);

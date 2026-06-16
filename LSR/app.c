@@ -11,6 +11,11 @@ struct app {
     surface*            surface;
     CRITICAL_SECTION    lock;
     direction           movement;
+    struct {
+        mouse_button    button;
+        POINT           current;
+        POINT           previous;
+    } mouse;
 };
 
 static int app_allocate(app** outObj) {
@@ -178,6 +183,14 @@ int app_execute(app* a, f64 time) {
         return result;
     }
 
+    if (a->mouse.button & (MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT)) {
+        const f32 dx = (f32)(a->mouse.previous.x - a->mouse.current.x) * 10.0f * (f32)time;
+        const f32 dy = (f32)(a->mouse.previous.y - a->mouse.current.y) * 10.0f * (f32)time;
+        if ((result = camera_rotate(s->camera, dx, dy)) != LSRERR_OK) {
+            return result;
+        }
+    }
+
     EnterCriticalSection(&a->lock);
 
     // TODO fog
@@ -291,6 +304,45 @@ int app_key_up(app* a, int key) {
         a->movement &= (~DIRECTION_DOWNWARD);
     } break;
     }
+
+    return LSRERR_OK;
+}
+
+int app_mouse_move(app* a, const POINT* point) {
+    if (a == NULL || point == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    CopyMemory(&a->mouse.previous, &a->mouse.current, sizeof(POINT));
+    CopyMemory(&a->mouse.current, point, sizeof(POINT));
+
+    return LSRERR_OK;
+}
+
+int app_mouse_up(app* a, mouse_button button) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (button < MOUSE_BUTTON_LEFT || button >= MOUSE_BUTTON_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    a->mouse.button &= (~button);
+
+    return LSRERR_OK;
+}
+
+int app_mouse_down(app* a, mouse_button button) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (button < MOUSE_BUTTON_LEFT || button >= MOUSE_BUTTON_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    a->mouse.button |= button;
 
     return LSRERR_OK;
 }

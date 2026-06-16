@@ -5,6 +5,20 @@
 
 typedef struct render render;
 
+typedef enum render_clipping {
+    RENDER_CLIPPING_DISABLED    = 0,
+    RENDER_CLIPPING_ENABLED     = 1,
+    RENDER_CLIPPING_COUNT       = 2,
+    RENDER_CLIPPING_FORCE_DWORD = 0x7FFFFFFF
+} render_clipping;
+
+typedef enum render_culling {
+    RENDER_CULLING_NONE = 0,
+    RENDER_CULLING_CCW  = 1,
+    RENDER_CULLING_CW  = 2,
+    // TODO
+} render_culling;
+
 typedef enum render_fog {
     RENDER_FOG_NONE         = 0,
     RENDER_FOR_LINEAR       = 1,
@@ -14,7 +28,8 @@ typedef enum render_fog {
 
 typedef enum render_draw_mode {
     RENDER_DRAW_MODE_POINTS         = 0,
-    RENDER_DRAW_MODE_COUNT          = 1,
+    RENDER_DRAW_MODE_TRIANGLES      = 1,
+    RENDER_DRAW_MODE_COUNT          = 2,
     RENDER_DRAW_MODE_FORCE_DWORD    = 0x7FFFFFFF
 } render_draw_mode;
 
@@ -43,6 +58,7 @@ int render_create(render** outObj);
 void render_release(render* r);
 
 int render_set_draw_mode(render* r, render_draw_mode mode);
+int render_set_clipping(render* r, render_clipping clipping);
 int render_set_fog(render* r, render_fog fog);
 int render_set_texture(render* r, const texture* t);
 int render_set_matrix(render* r, render_matrix type, const f32m4* matrix);
