@@ -415,9 +415,6 @@ int render_points(render* r, const f32m4* wvp,
         v->position.x /= v->position.w;
         v->position.y /= v->position.w;
         v->position.z /= v->position.w;
-
-        //v->uv.x /= v->position.w;
-        //v->uv.y /= v->position.w;
     }
 
     // Transform vertexes NDC coordinates to "screen" coordinates.
@@ -742,9 +739,9 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
 
     // Clamp to the target (screen) boundaries
     const int start_x = (int)max(0, floorf(min_x));
-    const int end_x = (int)min(width - 1, floorf(max_x));
+    const int end_x = (int)min(width - 1, ceilf(max_x));
     const int start_y = (int)max(0, floorf(min_y));
-    const int end_y = (int)min(height - 1, floorf(max_y));
+    const int end_y = (int)min(height - 1, ceilf(max_y));
 
     // Perspective-Correct Interpolation
     const f32 w0_inv = 1.0f / v0->position.w;
@@ -776,6 +773,11 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
     const f32 u1_w = v1->uv.x * w1_inv, v1_w = v1->uv.y * w1_inv;
     const f32 u2_w = v2->uv.x * w2_inv, v2_w = v2->uv.y * w2_inv;
 
+    // Depth interpolation
+    const f32 z0_w = v0->position.z * w0_inv;
+    const f32 z1_w = v1->position.z * w1_inv;
+    const f32 z2_w = v2->position.z * w2_inv;
+
     int result = LSRERR_OK;
     const texture* c = r->current;
 
@@ -790,10 +792,23 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
             const f32 w1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) * inv_area;
             const f32 w2 = ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) * inv_area;
 
+            f32 validation_w0 = w0, validation_w1 = w1, validation_w2 = w2;
+
+            // Flip the signs so containment check works universally
+            if (signed_area < 0.0f) {
+                validation_w0 = -w0; validation_w1 = -w1; validation_w2 = -w2;
+            }
+
             // If pixel center is inside all three edges
-            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+            if (validation_w0 >= 0.0f && validation_w1 >= 0.0f && validation_w2 >= 0.0f) {
+                // When calculating attributes, you MUST use the absolute (positive) 
+                // barycentric coordinates, otherwise your attributes/depth invert!
+                const f32 abs_w0 = fabsf(w0);
+                const f32 abs_w1 = fabsf(w1);
+                const f32 abs_w2 = fabsf(w2);
+
                 // Interpolate 1/W for depth testing and perspective correction
-                const f32 interpolated_inv_w = w0 * w0_inv + w1 * w1_inv + w2 * w2_inv;
+                const f32 interpolated_inv_w = abs_w0 * w0_inv + abs_w1 * w1_inv + abs_w2 * w2_inv;
                 const f32 current_w = 1.0f / interpolated_inv_w;
 
                 int draw = TRUE;
@@ -807,23 +822,23 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                     }
 
                     interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z
-                        ? (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w
+                        ? ((abs_w0 * v0->position.z + abs_w1 * v1->position.z + abs_w2 * v2->position.z) * current_w)
                         : current_w;
 
                     draw = interpolated_depth < depth;
                 }
 
                 // Perspective correct attribute interpolation
-                f32 alpha = (w0 * a0_w + w1 * a1_w + w2 * a2_w) * current_w;
-                f32 red = (w0 * r0_w + w1 * r1_w + w2 * r2_w) * current_w;
-                f32 green = (w0 * g0_w + w1 * g1_w + w2 * g2_w) * current_w;
-                f32 blue = (w0 * b0_w + w1 * b1_w + w2 * b2_w) * current_w;
+                f32 alpha = (abs_w0 * a0_w + abs_w1 * a1_w + abs_w2 * a2_w) * current_w;
+                f32 red = (abs_w0 * r0_w + abs_w1 * r1_w + abs_w2 * r2_w) * current_w;
+                f32 green = (abs_w0 * g0_w + abs_w1 * g1_w + abs_w2 * g2_w) * current_w;
+                f32 blue = (abs_w0 * b0_w + abs_w1 * b1_w + abs_w2 * b2_w) * current_w;
 
                 if (draw) {
                     // Sample texture to get pixel color
                     if (c != NULL) {
-                        const f32 u = (w0 * u0_w + w1 * u1_w + w2 * u2_w) * current_w;
-                        const f32 v = (w0 * v0_w + w1 * v1_w + w2 * v2_w) * current_w;
+                        const f32 u = (abs_w0 * u0_w + abs_w1 * u1_w + abs_w2 * u2_w) * current_w;
+                        const f32 v = (abs_w0 * v0_w + abs_w1 * v1_w + abs_w2 * v2_w) * current_w;
 
                         const int xc = (int)((f32)(c->width - 1) * u);
                         const int yc = (int)((f32)(c->height - 1) * v);
