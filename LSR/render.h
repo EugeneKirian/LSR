@@ -13,10 +13,11 @@ typedef enum render_clipping {
 } render_clipping;
 
 typedef enum render_culling {
-    RENDER_CULLING_NONE = 0,
-    RENDER_CULLING_CCW  = 1,
-    RENDER_CULLING_CW  = 2,
-    // TODO
+    RENDER_CULLING_NONE         = 0,
+    RENDER_CULLING_CCW          = 1,
+    RENDER_CULLING_CW           = 2,
+    RENDER_CULLING_COUNT        = 3,
+    RENDER_CULLING_FORCE_DWORD  = 0x7FFFFFFF
 } render_culling;
 
 typedef enum render_fog {
@@ -59,6 +60,7 @@ void render_release(render* r);
 
 int render_set_draw_mode(render* r, render_draw_mode mode);
 int render_set_clipping(render* r, render_clipping clipping);
+int render_set_culling(render* r, render_culling culling);
 int render_set_fog(render* r, render_fog fog);
 int render_set_texture(render* r, const texture* t);
 int render_set_matrix(render* r, render_matrix type, const f32m4* matrix);

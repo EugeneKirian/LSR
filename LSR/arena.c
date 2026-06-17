@@ -12,7 +12,7 @@ arena* arena_create(size_t capacity) {
         return NULL;
     }
 
-    char* value = (char*)malloc(ARENA_ALIGN(capacity));
+    u8* value = (u8*)malloc(ARENA_ALIGN(capacity));
 
     if (value == NULL) {
         free(a);
@@ -37,7 +37,7 @@ void* arena_allocate(arena* a, size_t size) {
         return NULL;
     }
 
-    char* result = a->value + a->size;
+    u8* result = a->value + a->size;
     a->size += aligned;
 
     return result;

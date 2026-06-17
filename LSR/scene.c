@@ -180,13 +180,21 @@ int scene_create(const char* path, scene** outObj) {
 
         f32x3 t = s->objects.transforms[0]->position;
 
-        f32x3 center;
-        center.x = (bounds.min.x + t.x + bounds.max.x + t.x) / 2.0f;
-        center.y = (bounds.min.y + t.y + bounds.max.x + t.y) / 2.0f;
-        center.z = -2.0f * bounds.max.z;
+        f32x3 position;
+        position.x = (bounds.min.x + t.x + bounds.max.x + t.x) / 2.0f;
+        position.y = (bounds.min.y + t.y + bounds.max.x + t.y) / 2.0f;
+        position.z = -2.0f * bounds.min.z;
 
         // Camera
-        if ((result = camera_create(&center, &s->camera)) != LSRERR_OK) {
+        if ((result = camera_create(&position, &s->camera)) != LSRERR_OK) {
+            scene_release(s);
+            return result;
+        }
+
+        // Look at the center of the bounding box
+        position.z = (bounds.min.z + t.z + bounds.max.z + t.z) / 2.0f;
+
+        if((result = camera_look_at(s->camera, &position)) != LSRERR_OK) {
             scene_release(s);
             return result;
         }

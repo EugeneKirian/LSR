@@ -16,7 +16,11 @@ struct app {
         POINT           current;
         POINT           previous;
     } mouse;
+    render_draw_mode    mode;
 };
+
+static int app_render_scene(app* a, f64 time);
+static int app_render_ui(app* a, f64 time);
 
 static int app_allocate(app** outObj) {
     if (outObj == NULL) {
@@ -52,6 +56,8 @@ int app_create(app** outObj) {
     }
 
     InitializeCriticalSection(&a->lock);
+
+    a->mode = RENDER_DRAW_MODE_TRIANGLES;
 
     *outObj = a;
 
@@ -174,67 +180,25 @@ int app_execute(app* a, f64 time) {
         return LSRERR_INVALID_CALL;
     }
 
-    render* r = a->render;
-    scene* s = a->scene;
+    camera* c = a->scene->camera;
 
-    // Move camera
-    int result = camera_move(s->camera, a->movement, (f32)time);
-    if (result != LSRERR_OK) {
-        return result;
-    }
-
-    if (a->mouse.button & (MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT)) {
-        const f32 dx = (f32)(a->mouse.previous.x - a->mouse.current.x) * 10.0f * (f32)time;
-        const f32 dy = (f32)(a->mouse.previous.y - a->mouse.current.y) * 10.0f * (f32)time;
-        if ((result = camera_rotate(s->camera, dx, dy)) != LSRERR_OK) {
-            return result;
+    // Move & rotate camera
+    int result = camera_move(c, a->movement, (f32)time);
+    if (result == LSRERR_OK) {
+        if (a->mouse.button & (MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT)) {
+            const f32 dx = -(f32)(a->mouse.previous.x - a->mouse.current.x) * 10.0f * (f32)time;
+            const f32 dy = (f32)(a->mouse.previous.y - a->mouse.current.y) * 10.0f * (f32)time;
+            if ((result = camera_rotate(c, dx, dy)) != LSRERR_OK) {
+                return result;
+            }
         }
     }
 
     EnterCriticalSection(&a->lock);
 
-    // TODO fog
-    // TODO mode
-    // TODO depth buffer
-
-    f32m4 view;
-    if ((result = camera_get_matrix(s->camera, &view)) == LSRERR_OK) {
-        if ((result = render_set_matrix(r, RENDER_MATRIX_VIEW, &view)) == LSRERR_OK) {
-            if ((result = render_start(r)) == LSRERR_OK) {
-                if ((result = render_clear(r, 0xFF636363)) == LSRERR_OK) {
-                    const size_t object_count = s->objects.count;
-                    for (size_t i = 0; i < object_count; i++) {
-                        const mg* m = s->objects.meshes[i];
-                        const size_t mesh_count = m->count;
-                        for (size_t ii = 0; ii < mesh_count; ii++) {
-                            // Texture
-                            const texture* tex = NULL;
-                            const char* texture_name = m->meshes[ii]->texture;
-                            if (texture_name != NULL) {
-                                const size_t texture_count = s->assets.count;
-                                for (size_t iii = 0; iii < texture_count; iii++) {
-                                    if (strcmp(texture_name, s->assets.textures[iii]->name) == 0) {
-                                        tex = s->assets.textures[iii];
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if ((result = render_set_texture(r, tex)) == LSRERR_OK) {
-
-                                // TODO set world matrix
-
-                                // Object
-                                result = render_draw(r, m->meshes[ii]->vertexes,
-                                    m->meshes[ii]->indexes, m->meshes[ii]->index_count);
-                            }
-                        }
-                    }
-
-                    result = render_end(r);
-                }
-            }
-        }
+    // Render the scene and the UI
+    if ((result = app_render_scene(a, time)) == LSRERR_OK) {
+        result = app_render_ui(a, time);
     }
 
     LeaveCriticalSection(&a->lock);
@@ -269,6 +233,9 @@ int app_key_down(app* a, int key) {
     } break;
     case 'E': {
         a->movement |= DIRECTION_DOWNWARD;
+    } break;
+    case 'M': {
+        a->mode = (a->mode + 1) % RENDER_DRAW_MODE_COUNT;
     } break;
     }
 
@@ -319,22 +286,25 @@ int app_mouse_move(app* a, const POINT* point) {
     return LSRERR_OK;
 }
 
-int app_mouse_up(app* a, mouse_button button) {
-    if (a == NULL) {
+int app_mouse_up(app* a, const POINT* point, mouse_button button) {
+    if (a == NULL || point == NULL) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
     if (button < MOUSE_BUTTON_LEFT || button >= MOUSE_BUTTON_COUNT) {
         return LSRERR_INVALID_ARGUMENT;
     }
+
+    CopyMemory(&a->mouse.current, point, sizeof(POINT));
+    CopyMemory(&a->mouse.previous, point, sizeof(POINT));
 
     a->mouse.button &= (~button);
 
     return LSRERR_OK;
 }
 
-int app_mouse_down(app* a, mouse_button button) {
-    if (a == NULL) {
+int app_mouse_down(app* a, const POINT* point, mouse_button button) {
+    if (a == NULL || point == NULL) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
@@ -342,7 +312,162 @@ int app_mouse_down(app* a, mouse_button button) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
+    CopyMemory(&a->mouse.current, point, sizeof(POINT));
+    CopyMemory(&a->mouse.previous, point, sizeof(POINT));
+
     a->mouse.button |= button;
+
+    return LSRERR_OK;
+}
+
+int app_render_scene(app* a, f64 time) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    int result = LSRERR_OK;
+
+    scene* s = a->scene;
+    render* r = a->render;
+
+    // 1. Set projection and view matrixes
+    f32m4 matrix;
+    if ((result = f32m4_projection(&matrix, a->surface->width, a->surface->height, 0.0f, 1.0f)) == LSRERR_OK) {
+        if ((result = render_set_matrix(r, RENDER_MATRIX_PROJECTION, &matrix)) == LSRERR_OK) {
+            if ((result = camera_get_matrix(s->camera, &matrix)) == LSRERR_OK) {
+                result = render_set_matrix(r, RENDER_MATRIX_VIEW, &matrix);
+            }
+        }
+    }
+
+    // 2. Set configuration
+    if ((result == LSRERR_OK)
+        && (result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
+        if ((result = render_set_culling(r, RENDER_CULLING_CCW)) == LSRERR_OK) {
+            if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
+                result = render_set_draw_mode(r, a->mode);
+            }
+        }
+    }
+
+    // 3. Render the scene
+    if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
+        if ((result = render_clear(r, 0xFF636363)) == LSRERR_OK) {
+            const size_t object_count = s->objects.count;
+            for (size_t i = 0; i < object_count; i++) {
+                if ((result = transform_f32m4(s->objects.transforms[i], &matrix)) == LSRERR_OK) {
+                    if ((result = render_set_matrix(r, RENDER_MATRIX_WORLD, &matrix)) == LSRERR_OK) {
+                        const mg* m = s->objects.meshes[i];
+                        const size_t mesh_count = m->count;
+                        for (size_t ii = 0; ii < mesh_count; ii++) {
+                            // Find texture
+                            const texture* tex = NULL;
+                            const char* texture_name = m->meshes[ii]->texture;
+                            if (texture_name != NULL) {
+                                const size_t texture_count = s->assets.count;
+                                for (size_t iii = 0; iii < texture_count; iii++) {
+                                    if (strcmp(texture_name, s->assets.textures[iii]->name) == 0) {
+                                        tex = s->assets.textures[iii];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Set texture & render the object
+                            if ((result = render_set_texture(r, tex)) == LSRERR_OK) {
+                                if ((result = render_draw(r, m->meshes[ii]->vertexes,
+                                    m->meshes[ii]->indexes, m->meshes[ii]->index_count)) != LSRERR_OK) {
+                                    goto stop;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    stop:
+        if ((result = render_end(r)) != LSRERR_OK) {
+            return result;
+        }
+    }
+
+    return result;
+}
+
+int app_render_ui(app* a, f64 time) {
+    if (a == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    int result = LSRERR_OK;
+
+    scene* s = a->scene;
+    render* r = a->render;
+
+    // 1. Set projection, view, and world matrixes
+    f32m4 matrix;
+    if ((result = f32m4_orthographic(&matrix, a->surface->width, a->surface->height, 0.0f, 1.0f)) == LSRERR_OK) {
+        if ((result = render_set_matrix(r, RENDER_MATRIX_PROJECTION, &matrix)) == LSRERR_OK) {
+            if ((result = f32m4_identity(&matrix)) == LSRERR_OK) {
+                if ((result = render_set_matrix(r, RENDER_MATRIX_VIEW, &matrix)) == LSRERR_OK) {
+                    result = render_set_matrix(r, RENDER_MATRIX_WORLD, &matrix);
+                }
+            }
+        }
+    }
+
+    // 2. Set configuration
+    if ((result == LSRERR_OK)
+        && (result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
+        if ((result = render_set_culling(r, RENDER_CULLING_NONE)) == LSRERR_OK) {
+            if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
+                result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+            }
+        }
+    }
+
+    // 3. Render the UI
+    if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
+
+        //// TODO
+        //vertex v[4];
+        //ZeroMemory(v, sizeof(v));
+
+        //v[0].position.x = 100.0f;
+        //v[0].position.y = 100.0f;
+        //v[0].position.z = 0.0f;
+        //v[0].color = 0xFF000000;
+
+        //v[1].position.x = 100.0f;
+        //v[1].position.y = 200.0f;
+        //v[1].position.z = 0.0f;
+        //v[1].color = 0xFFFF0000;
+
+        //v[2].position.x = 200.0f;
+        //v[2].position.y = 200.0f;
+        //v[2].position.z = 0.0f;
+        //v[2].color = 0xFF00FF00;
+
+        //v[3].position.x = 200.0f;
+        //v[3].position.y = 100.0f;
+        //v[3].position.z = 0.0f;
+        //v[3].color = 0xFF0000FF;
+
+        //int idx[6] = { 0, 1, 2, 3, 0, 2 };
+
+        //// Set texture & render the object
+        //if ((result = render_set_texture(r, NULL)) == LSRERR_OK) {
+        //    if ((result = render_draw(r, v, idx, 6)) != LSRERR_OK) {
+        //        goto stop;
+        //    }
+        //}
+
+    stop:
+        if ((result = render_end(r)) != LSRERR_OK) {
+            return result;
+        }
+    }
 
     return LSRERR_OK;
 }

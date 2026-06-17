@@ -15,6 +15,7 @@ int camera_move_forward(camera* c, f32 value);
 int camera_move_up(camera* c, f32 value);
 int camera_move_right(camera* c, f32 value);
 
+int camera_look_at(camera* c, const f32x3* target);
 int camera_rotate(camera* c, f32 x, f32 y);
 
-int camera_get_matrix(camera* c, f32m4* m);
+int camera_get_matrix(const camera* c, f32m4* m);

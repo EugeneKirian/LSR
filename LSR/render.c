@@ -20,7 +20,7 @@ struct render {
     int active;
     arena* arena;
     struct {
-        render_clipping clip;
+        render_clipping clipping;
         render_culling culling;
         render_fog fog;
         render_draw_mode mode;
@@ -99,9 +99,9 @@ int render_create(render** outObj) {
         }
     }
 
-    r->settings.clip = RENDER_CLIPPING_ENABLED;
+    r->settings.clipping = RENDER_CLIPPING_ENABLED;
     r->settings.culling = RENDER_CULLING_CCW;
-    r->settings.depth = RENDER_DEPTH_BUFFER_W;
+    r->settings.depth = RENDER_DEPTH_BUFFER_Z;
     r->settings.mode = RENDER_DRAW_MODE_TRIANGLES;
 
     *outObj = r;
@@ -150,7 +150,21 @@ int render_set_clipping(render* r, render_clipping clipping) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    r->settings.clip = clipping;
+    r->settings.clipping = clipping;
+
+    return LSRERR_OK;
+}
+
+int render_set_culling(render* r, render_culling culling) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (culling < RENDER_CULLING_NONE || culling >= RENDER_CULLING_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.culling = culling;
 
     return LSRERR_OK;
 }
@@ -373,7 +387,7 @@ int render_points(render* r, const f32m4* wvp,
             return result;
         }
 
-        if (r->settings.clip == RENDER_CLIPPING_ENABLED) {
+        if (r->settings.clipping == RENDER_CLIPPING_ENABLED) {
             int outside = FALSE;
             for (size_t p = 0; p < FRUSTRUM_PLANE_COUNT; p++) {
                 if (outside = frustrum_is_outside_plane(out, p)) {
@@ -521,7 +535,7 @@ int render_triangles(render* r, const f32m4* wvp,
         }
         if (skip_triangle) continue;
 
-        if (r->settings.clip == RENDER_CLIPPING_ENABLED) {
+        if (r->settings.clipping == RENDER_CLIPPING_ENABLED) {
             // Buffer spaces to swap lists between plane clipping passes Max vertices generated = 12
             rv buffer_a[12];
             rv buffer_b[12];
@@ -702,17 +716,17 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
     const f32 signed_area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
 
     if (r->settings.culling == RENDER_CULLING_NONE) {
-        if (fabsf(signed_area) <= 1e-5f /* TODO epsillon */) {
+        if (fabsf(signed_area) <= 1e-5f) {
             return LSRERR_OK;
         }
     }
     else if (r->settings.culling == RENDER_CULLING_CCW) {
-        if (signed_area <= 1e-5f /* TODO epsillon */) {
+        if (signed_area < 1e-5f) {
             return LSRERR_OK;
         }
     }
     else if (r->settings.culling == RENDER_CULLING_CW) {
-        if (signed_area >= -1e-5f /* TODO epsillon */) {
+        if (signed_area > -1e-5f) {
             return LSRERR_OK;
         }
     }
@@ -772,13 +786,9 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
             const f32 py = (float)y + 0.5f;
 
             // Edge functions (Barycentric weights)
-            f32 w0 = ((x1 - px) * (y2 - py) - (y1 - py) * (x2 - px)) * inv_area;
-            f32 w1 = ((x2 - px) * (y0 - py) - (y2 - py) * (x0 - px)) * inv_area;
-            f32 w2 = ((x0 - px) * (y1 - py) - (y0 - py) * (x1 - px)) * inv_area;
-            
-            if (signed_area < 0.0f) {
-                w0 = -w0; w1 = -w1; w2 = -w2;
-            }
+            const f32 w0 = ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) * inv_area;
+            const f32 w1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) * inv_area;
+            const f32 w2 = ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) * inv_area;
 
             // If pixel center is inside all three edges
             if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
@@ -797,7 +807,7 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                     }
 
                     interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z
-                        ? (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z)
+                        ? (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w
                         : current_w;
 
                     draw = interpolated_depth < depth;

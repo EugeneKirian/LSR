@@ -78,7 +78,10 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_RBUTTONDOWN) {
             SetCapture(hwnd);
         }
-        app_mouse_down(state.app,
+        POINT point;
+        GetCursorPos(&point);
+        ScreenToClient(hwnd, &point);
+        app_mouse_down(state.app, &point,
             msg == WM_LBUTTONDOWN ? MOUSE_BUTTON_LEFT : MOUSE_BUTTON_RIGHT);
     } break;
     case WM_LBUTTONUP:
@@ -86,7 +89,10 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_RBUTTONUP) {
             ReleaseCapture();
         }
-        app_mouse_up(state.app,
+        POINT point;
+        GetCursorPos(&point);
+        ScreenToClient(hwnd, &point);
+        app_mouse_up(state.app, &point,
             msg == WM_LBUTTONUP ? MOUSE_BUTTON_LEFT : MOUSE_BUTTON_RIGHT);
     } break;
     }

@@ -5,7 +5,7 @@
 typedef struct texture {
     char*   name;
     int     width, height;
-    char*   data;
+    u8*     data;
 } texture;
 
 int texture_create(const char* name, int w, int h, texture** outObj);

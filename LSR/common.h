@@ -85,3 +85,10 @@ int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result);
 int f32m4_identity(f32m4* m);
 int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result);
 int f32m4_projection(f32m4* m, int w, int h, f32 min, f32 max);
+int f32m4_orthographic(f32m4* m, int w, int h, f32 min, f32 max);
+
+inline f32 clampf(f32 value, f32 min, f32 max) {
+    return value < min ? min : (value > max ? max : value);
+}
+
+int transform_f32m4(const transform* t, f32m4* m);

@@ -3,9 +3,9 @@
 #include "common.h"
 
 typedef struct {
-    char* value;
-    size_t size;
-    size_t capacity;
+    u8*     value;
+    size_t  size;
+    size_t  capacity;
 } arena;
 
 arena* arena_create(size_t capacity);

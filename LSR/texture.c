@@ -29,7 +29,7 @@ static int texture_allocate(const char* name, int w, int h, texture** outObj) {
 
     const size_t size = w * h * sizeof(u32);
 
-    t->data = (char*)malloc(size);
+    t->data = (u8*)malloc(size);
     if (t->data == NULL) {
         texture_release(t);
         return LSRERR_OUT_OF_MEMORY;
@@ -90,7 +90,7 @@ int texture_load_bitmap(texture* t, const bmp* image) {
     const int w = t->width < image_width ? t->width : image_width;
     const int h = t->height < image_height ? t->height : image_height;
 
-    //Convert image pixels to 32-bit RGBA
+    // Convert image pixels to 32-bit RGBA
     for (int x = 0; x < h; x++) {
         u32* dst = (u32*)(t->data + w * x * sizeof(u32));
         const RGBTRIPLE* src =

@@ -41,6 +41,7 @@ int f32x3_normalize(const f32x3* v, f32x3* n) {
         n->x = v->x;
         n->y = v->y;
         n->z = v->z;
+
         return LSRERR_OK;
     }
 
@@ -56,14 +57,14 @@ int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3*
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    // Calculate two edges of the triangle
-    const f32x3 e1 = { b->x - a->x, b->y - a->y, b->z - a->z };
-    const f32x3 e2 = { c->x - a->x, c->y - a->y, c->z - a->z };
-
-    f32x3 cp;
+    f32x3 e1, e2, cp;
     ZeroMemory(&cp, sizeof(f32x3));
 
-    // Compute normal
+    // 1. Calculate two edges of the triangle
+    e1.x = b->x - a->x; e1.y = b->y - a->y; e1.z = b->z - a->z;
+    e2.x = c->x - a->x; e2.y = c->y - a->y; e2.z = c->z - a->z;
+
+    // 2. Compute normal (cross product)
     int result = f32x3_cross_product(&e1, &e2, &cp);
     if (result == LSRERR_OK) {
         return f32x3_normalize(&cp, n);
@@ -129,10 +130,68 @@ int f32m4_projection(f32m4* m, int w, int h, f32 min, f32 max) {
 
     const f32 tan_fov = tanf(fov / 2.0f);
 
-    m->m4x4[0][0] = 1.0f / (a * tan_fov); m->m4x4[0][1] = 0.0f; m->m4x4[0][2] = 0.0f;m->m4x4[0][3] = 0.0f;
-    m->m4x4[1][0] = 0.0f; m->m4x4[1][1] = 1.0f / tan_fov; m->m4x4[1][2] = 0.0f;m->m4x4[1][3] = 0.0f;
+    m->m4x4[0][0] = 1.0f / (a * tan_fov); m->m4x4[0][1] = 0.0f; m->m4x4[0][2] = 0.0f; m->m4x4[0][3] = 0.0f;
+    m->m4x4[1][0] = 0.0f; m->m4x4[1][1] = 1.0f / tan_fov; m->m4x4[1][2] = 0.0f; m->m4x4[1][3] = 0.0f;
     m->m4x4[2][0] = 0.0f; m->m4x4[2][1] = 0.0f; m->m4x4[2][2] = max / (max - min); m->m4x4[2][3] = 1.0f;
     m->m4x4[3][0] = 0.0f; m->m4x4[3][1] = 0.0f; m->m4x4[3][2] = -(min * max) / (max - min); m->m4x4[3][3] = 0.0f;
+
+    return LSRERR_OK;
+}
+
+int f32m4_orthographic(f32m4* m, int w, int h, f32 min, f32 max) {
+    if (m == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    m->m4x4[0][0] = 2.0f / (f32)w; m->m4x4[0][1] = 0.0f; m->m4x4[0][2] = 0.0f; m->m4x4[0][3] = 0.0f;
+    m->m4x4[1][0] = 0.0f; m->m4x4[1][1] = -2.0f / (f32)h; m->m4x4[1][2] = 0.0f; m->m4x4[1][3] = 0.0f;
+    m->m4x4[2][0] = 0.0f; m->m4x4[2][1] = 0.0f; m->m4x4[2][2] = 1.0f / (max - min); m->m4x4[2][3] = 0.0f;
+    m->m4x4[3][0] = -1.0f; m->m4x4[3][1] = 1.0f; m->m4x4[3][2] = -min / (max - min); m->m4x4[3][3] = 1.0f;
+
+    return LSRERR_OK;
+}
+
+int transform_f32m4(const transform* t, f32m4* m) {
+    if (t == NULL || m == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    // 1. Convert angles from degrees to radians
+    const f32 yaw = t->rotation.yaw * (f32)(M_PI / 180.0);
+    const f32 pitch = t->rotation.pitch * (f32)(M_PI / 180.0);
+    const f32 roll = t->rotation.roll * (f32)(M_PI / 180.0);
+
+    // 2. Precompute sines and cosines
+    const f32 sy = sinf(yaw);   const f32 cy = cosf(yaw);
+    const f32 sp = sinf(pitch); const f32 cp = cosf(pitch);
+    const f32 sr = sinf(roll);  const f32 cr = cosf(roll);
+
+    // 3. Construct Row-Major World Matrix
+    // (Scale * Rotation * Translation)
+
+    // Row 0: Right Vector * Scale.X
+    m->m4x4[0][0] = (cy * cr + sy * sp * sr) * t->scale.x;
+    m->m4x4[0][1] = sr * cp * t->scale.x;
+    m->m4x4[0][2] = (-sy * cr + cy * sp * sr) * t->scale.z;
+    m->m4x4[0][3] = 0.0f;
+
+    // Row 1: Up Vector * Scale.Y
+    m->m4x4[1][0] = (-cy * sr + sy * sp * cr) * t->scale.y;
+    m->m4x4[1][1] = cr * cp * t->scale.y;
+    m->m4x4[1][2] = (sy * sr + cy * sp * cr) * t->scale.z;
+    m->m4x4[1][3] = 0.0f;
+
+    // Row 2: Forward Vector * Scale.Z
+    m->m4x4[2][0] = sy * cp * t->scale.x;
+    m->m4x4[2][1] = -sp * t->scale.y;
+    m->m4x4[2][2] = cy * cp * t->scale.z;
+    m->m4x4[2][3] = 0.0f;
+
+    // Row 3: Translation Vector (Position)
+    m->m4x4[3][0] = t->position.x;
+    m->m4x4[3][1] = t->position.y;
+    m->m4x4[3][2] = t->position.z;
+    m->m4x4[3][3] = 1.0f;
 
     return LSRERR_OK;
 }

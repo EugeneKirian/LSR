@@ -7,7 +7,7 @@ typedef struct surface {
     CRITICAL_SECTION    lock;
     int                 width, height;
     HBITMAP             bitmap;
-    char*               data;
+    u8*                 data;
 } surface;
 
 int surface_create(HDC hdc, int w, int h, surface** outObj);
