@@ -14,6 +14,7 @@
 #define LSRERR_INVALID_FILE     (-5)
 #define LSRERR_NOT_SUPPORTED    (-6)
 #define LSRERR_INVALID_CALL     (-7)
+#define LSRERR_INTERNAL_ERROR   (-8)
 
 typedef float f32;
 typedef double f64;
@@ -92,3 +93,7 @@ inline f32 clampf(f32 value, f32 min, f32 max) {
 }
 
 int transform_f32m4(const transform* t, f32m4* m);
+
+u32 power_of_two_round_up(u32 value);
+
+u32 color_blend(u32 back, u32 front);

@@ -1,9 +1,19 @@
 #include "app.h"
+#include "font.h"
 #include "render.h"
 #include "scene.h"
 #include "surface.h"
 
+#include <stdio.h>
 #include <stdlib.h>
+
+#define APP_FONT_NAME           "Arial"
+#define APP_FONT_SIZE           20
+#define APP_FONT_BACKGROUND     0x00000000
+#define APP_FONT_FOREGROUND     0xFFFFFFFF
+
+#define QUAD_INDEX_COUNT        6
+#define QUAD_VERTEX_COUNT       4
 
 struct app {
     scene*              scene;
@@ -17,10 +27,12 @@ struct app {
         POINT           previous;
     } mouse;
     render_draw_mode    mode;
+    font*               font;
 };
 
 static int app_render_scene(app* a, f64 time);
 static int app_render_ui(app* a, f64 time);
+static int app_render_text(app* a, int x, int y, const char* text);
 
 static int app_allocate(app** outObj) {
     if (outObj == NULL) {
@@ -55,6 +67,12 @@ int app_create(app** outObj) {
         return result;
     }
 
+    if ((result = font_create(APP_FONT_NAME, APP_FONT_SIZE,
+        TRUE, APP_FONT_FOREGROUND, APP_FONT_BACKGROUND, &a->font)) != LSRERR_OK) {
+        app_release(a);
+        return result;
+    }
+
     InitializeCriticalSection(&a->lock);
 
     a->mode = RENDER_DRAW_MODE_TRIANGLES;
@@ -78,6 +96,10 @@ void app_release(app* a) {
 
         if (a->surface != NULL) {
             surface_release(a->surface);
+        }
+
+        if (a->font != NULL) {
+            font_release(a->font);
         }
     }
 }
@@ -342,10 +364,12 @@ int app_render_scene(app* a, f64 time) {
 
     // 2. Set configuration
     if ((result == LSRERR_OK)
-        && (result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
-        if ((result = render_set_culling(r, RENDER_CULLING_CCW)) == LSRERR_OK) {
-            if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
-                result = render_set_draw_mode(r, a->mode);
+        && (result = render_set_blending(r, RENDER_BLENDING_DISABLED)) == LSRERR_OK) {
+        if ((result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
+            if ((result = render_set_culling(r, RENDER_CULLING_CCW)) == LSRERR_OK) {
+                if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
+                    result = render_set_draw_mode(r, a->mode);
+                }
             }
         }
     }
@@ -419,53 +443,99 @@ int app_render_ui(app* a, f64 time) {
 
     // 2. Set configuration
     if ((result == LSRERR_OK)
-        && (result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
-        if ((result = render_set_culling(r, RENDER_CULLING_NONE)) == LSRERR_OK) {
-            if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
-                result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+        && (result = render_set_blending(r, RENDER_BLENDING_ENABLED)) == LSRERR_OK) {
+        if ((result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
+            if ((result = render_set_culling(r, RENDER_CULLING_NONE)) == LSRERR_OK) {
+                if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
+                    result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+                }
             }
         }
     }
 
     // 3. Render the UI
     if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
+        char message[128];
+        sprintf(message,
+            "FPS: %5d\r\nMode: %s\r\nCamera: %f %f %f",
+            (int)(1.0 / time), a->mode == RENDER_DRAW_MODE_POINTS ? "Points" : "Triangles",
+            a->scene->camera->position.x, a->scene->camera->position.y, a->scene->camera->position.z);
 
-        //// TODO
-        //vertex v[4];
-        //ZeroMemory(v, sizeof(v));
-
-        //v[0].position.x = 100.0f;
-        //v[0].position.y = 100.0f;
-        //v[0].position.z = 0.0f;
-        //v[0].color = 0xFF000000;
-
-        //v[1].position.x = 100.0f;
-        //v[1].position.y = 200.0f;
-        //v[1].position.z = 0.0f;
-        //v[1].color = 0xFFFF0000;
-
-        //v[2].position.x = 200.0f;
-        //v[2].position.y = 200.0f;
-        //v[2].position.z = 0.0f;
-        //v[2].color = 0xFF00FF00;
-
-        //v[3].position.x = 200.0f;
-        //v[3].position.y = 100.0f;
-        //v[3].position.z = 0.0f;
-        //v[3].color = 0xFF0000FF;
-
-        //int idx[6] = { 0, 1, 2, 3, 0, 2 };
-
-        //// Set texture & render the object
-        //if ((result = render_set_texture(r, NULL)) == LSRERR_OK) {
-        //    if ((result = render_draw(r, v, idx, 6)) != LSRERR_OK) {
-        //        goto stop;
-        //    }
-        //}
+        if ((result = app_render_text(a, 2, 0, message)) != LSRERR_OK) {
+            goto stop;
+        }
 
     stop:
         if ((result = render_end(r)) != LSRERR_OK) {
             return result;
+        }
+    }
+
+    return LSRERR_OK;
+}
+
+int app_render_text(app* a, int x, int y, const char* text) {
+    if (a == NULL || text == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    int cx = x, height = 0;
+    const texture* tex = NULL;
+    vertex vertexes[QUAD_VERTEX_COUNT];
+    ZeroMemory(vertexes, QUAD_VERTEX_COUNT * sizeof(vertex));
+    const int idx[QUAD_INDEX_COUNT] = { 0, 1, 2, 3, 0, 2 };
+    fqd quad;
+    ZeroMemory(&quad, sizeof(fqd));
+
+    for (int i = 0; i < QUAD_VERTEX_COUNT; i++) {
+        vertexes[i].color = 0xFFFFFFFF;
+    }
+
+    int result = LSRERR_OK;
+    if ((result = font_get_height(a->font, &height)) == LSRERR_OK) {
+        if ((result = font_get_texture(a->font, &tex)) == LSRERR_OK) {
+            if ((result = render_set_texture(a->render, tex)) == LSRERR_OK) {
+                for (int i = 0; text[i] != NULL; i++) {
+                    u32 repeat = 1;
+                    u32 character = (u32)text[i];
+
+                    if (character == '\r') {
+                        continue;
+                    }
+                    else if (character == '\n') {
+                        cx = x;
+                        y += height;
+                        continue;
+                    }
+                    else if (character == '\t') {
+                        character = ' ';
+                        repeat = 4;
+                    }
+
+                    if (font_get_item(a->font, character, &quad) == LSRERR_OK) {
+                        for (int q = 0; q < QUAD_VERTEX_COUNT; q++) {
+                            CopyMemory(&vertexes[q].uv, &quad.uv[q], sizeof(f32x2));
+                        }
+
+                        for (u32 r = 0; r < repeat; r++) {
+                            vertexes[0].position.x = (f32)(cx);
+                            vertexes[0].position.y = (f32)(y + height - quad.y);
+                            vertexes[1].position.x = (f32)(cx);
+                            vertexes[1].position.y = (f32)(y + height + quad.height - quad.y);
+                            vertexes[2].position.x = (f32)(cx + quad.width);
+                            vertexes[2].position.y = (f32)(y + height + quad.height - quad.y);
+                            vertexes[3].position.x = (f32)(cx + quad.width);
+                            vertexes[3].position.y = (f32)(y + height - quad.y);
+
+                            if ((result = render_draw(a->render, vertexes, idx, QUAD_INDEX_COUNT)) != LSRERR_OK) {
+                                return result;
+                            }
+
+                            cx +=  quad.span;
+                        }
+                    }
+                }
+            }
         }
     }
 

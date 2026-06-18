@@ -195,3 +195,59 @@ int transform_f32m4(const transform* t, f32m4* m) {
 
     return LSRERR_OK;
 }
+
+u32 power_of_two_round_up(u32 value) {
+    if (value <= 1) {
+        return 1;
+    }
+
+    value--;
+    value |= value >> 1;
+    value |= value >> 2;
+    value |= value >> 4;
+    value |= value >> 8;
+    value |= value >> 16;
+
+    return value + 1;
+}
+
+u32 color_blend(u32 back, u32 front) {
+    const u32 front_alpha = (front >> 24) & 0xFF;
+
+    if (front_alpha == 255) {
+        return front;
+    }
+    
+    if (front_alpha == 0) {
+        return back;
+    }
+
+    const u32 back_alpha = (back >> 24) & 0xFF;
+
+    if (back_alpha == 0) {
+        return front;
+    }
+
+    const f32 fa = (f32)front_alpha / 255.0f;
+    const f32 fr = (f32)((front >> 16) & 0xFF) / 255.0f;
+    const f32 fg = (f32)((front >> 8) & 0xFF) / 255.0f;
+    const f32 fb = (f32)((front >> 0) & 0xFF) / 255.0f;
+
+    const f32 ba = (f32)back_alpha / 255.0f;
+    const f32 br = (f32)((back >> 16) & 0xFF) / 255.0f;
+    const f32 bg = (f32)((back >> 8) & 0xFF) / 255.0f;
+    const f32 bb = (f32)((back >> 0) & 0xFF) / 255.0f;
+
+    const f32 ra = fa + (ba * (1.0f - fa));
+    const f32 rr = ((fr * fa) + (br * ba * (1.0f - fa))) / ra;
+    const f32 rg = ((fg * fa) + (bg * ba * (1.0f - fa))) / ra;
+    const f32 rb = ((fb * fa) + (bb * ba * (1.0f - fa))) / ra;
+
+    const u32 oa = (u8)roundf(ra * 255.0f);
+    const u32 or = (u8)roundf(rr * 255.0f);
+    const u32 og = (u8)roundf(rg * 255.0f);
+    const u32 ob = (u8)roundf(rb * 255.0f);
+
+    return ((oa & 0xFF) << 24)
+        | ((or & 0xFF) << 16) | ((og & 0xFF) << 8) | (ob & 0xFF);
+}

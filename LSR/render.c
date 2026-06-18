@@ -20,6 +20,7 @@ struct render {
     int active;
     arena* arena;
     struct {
+        render_blending blending;
         render_clipping clipping;
         render_culling culling;
         render_fog fog;
@@ -137,6 +138,20 @@ int render_set_draw_mode(render* r, render_draw_mode mode) {
     }
 
     r->settings.mode = mode;
+
+    return LSRERR_OK;
+}
+
+int render_set_blending(render* r, render_blending blending) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (blending < RENDER_BLENDING_DISABLED || blending >= RENDER_BLENDING_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.blending = blending;
 
     return LSRERR_OK;
 }
@@ -856,8 +871,17 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                         blue *= (f32)((texture_color & 0x000000FF) >> 0) / 255.0f;
                     }
 
-                    const u32 color = ((u8)(255.0f * alpha) << 24)
+                    u32 color = ((u8)(255.0f * alpha) << 24)
                         | ((u8)(255.0f * red) << 16) | ((u8)(255.0f * green) << 8) | ((u8)(255.0f * blue));
+
+                    if (r->settings.blending == RENDER_BLENDING_ENABLED) {
+                        u32 target = 0;
+                        if ((result = texture_get_point_color(r->surface, x, y, &target)) != LSRERR_OK) {
+                            return result;
+                        }
+
+                        color = color_blend(target, color);
+                    }
 
                     // Draw pixel and update depth buffer if needed
                     if ((result = texture_set_point_color(r->surface, x, y, color)) == LSRERR_OK) {

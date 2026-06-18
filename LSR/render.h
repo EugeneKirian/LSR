@@ -50,6 +50,13 @@ typedef enum render_depth_buffer {
     RENDER_DEPTH_BUFFER_FORCE_DWORD = 0x7FFFFFFF
 } render_depth_buffer;
 
+typedef enum render_blending {
+    RENDER_BLENDING_DISABLED        = 0,
+    RENDER_BLENDING_ENABLED         = 1,
+    RENDER_BLENDING_COUNT           = 2,
+    RENDER_BLENDING_FORCE_DWORD     = 0x7FFFFFFF
+} render_blending;
+
 typedef struct render_viewport {
     int x, y, width, height;
     f32 min, max;
@@ -59,6 +66,7 @@ int render_create(render** outObj);
 void render_release(render* r);
 
 int render_set_draw_mode(render* r, render_draw_mode mode);
+int render_set_blending(render* r, render_blending blending);
 int render_set_clipping(render* r, render_clipping clipping);
 int render_set_culling(render* r, render_culling culling);
 int render_set_fog(render* r, render_fog fog);
