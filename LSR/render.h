@@ -20,6 +20,14 @@ typedef enum render_culling {
     RENDER_CULLING_FORCE_DWORD  = 0x7FFFFFFF
 } render_culling;
 
+typedef enum render_fill {
+    RENDER_FILL_POINT           = 0,
+    RENDER_FILL_WIRE            = 1,
+    RENDER_FILL_SOLID           = 2,
+    RENDER_FILL_COUNT           = 3,
+    RENDER_FILL_FORCE_DWORD     = 0x7FFFFFFF
+} render_fill;
+
 typedef enum render_fog {
     RENDER_FOG_NONE                 = 0,
     RENDER_FOG_LINEAR               = 1,
@@ -71,6 +79,7 @@ int render_set_draw_mode(render* r, render_draw_mode mode);
 int render_set_blending(render* r, render_blending blending);
 int render_set_clipping(render* r, render_clipping clipping);
 int render_set_culling(render* r, render_culling culling);
+int render_set_fill(render* r, render_fill fill);
 int render_set_fog(render* r, render_fog fog);
 int render_set_fog_color(render* r, u32 color);
 int render_set_fog_density(render* r, f32 density);

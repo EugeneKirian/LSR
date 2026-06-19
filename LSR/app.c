@@ -8,7 +8,7 @@
 #include <stdlib.h>
 
 #define APP_FONT_NAME           "Arial"
-#define APP_FONT_SIZE           20
+#define APP_FONT_SIZE           18
 #define APP_FONT_BACKGROUND     0x00000000
 #define APP_FONT_FOREGROUND     0xFFFFFFFF
 
@@ -29,7 +29,9 @@ struct app {
         POINT           current;
         POINT           previous;
     } mouse;
+    render_clipping     clipping;
     render_draw_mode    mode;
+    render_fill         fill;
     render_fog          fog;
     font*               font;
 };
@@ -79,6 +81,8 @@ int app_create(app** outObj) {
 
     InitializeCriticalSection(&a->lock);
 
+    a->clipping = RENDER_CLIPPING_ENABLED;
+    a->fill = RENDER_FILL_SOLID;
     a->fog = RENDER_FOG_LINEAR;
     a->mode = RENDER_DRAW_MODE_TRIANGLES;
 
@@ -262,11 +266,17 @@ int app_key_down(app* a, int key) {
     case 'E': {
         a->movement |= DIRECTION_DOWNWARD;
     } break;
-    case 'M': {
-        a->mode = (a->mode + 1) % RENDER_DRAW_MODE_COUNT;
+    case 'C': {
+        a->clipping = (a->clipping + 1) % RENDER_CLIPPING_COUNT;
+    } break;
+    case 'I': {
+        a->fill = (a->fill + 1) % RENDER_FILL_COUNT;
     } break;
     case 'F': {
         a->fog = (a->fog + 1) % RENDER_FOG_COUNT;
+    } break;
+    case 'M': {
+        a->mode = (a->mode + 1) % RENDER_DRAW_MODE_COUNT;
     } break;
     }
 
@@ -374,13 +384,15 @@ int app_render_scene(app* a, f64 time) {
     // 2. Set configuration
     if ((result == LSRERR_OK)
         && (result = render_set_blending(r, RENDER_BLENDING_DISABLED)) == LSRERR_OK) {
-        if ((result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
+        if ((result = render_set_clipping(r, a->clipping)) == LSRERR_OK) {
             if ((result = render_set_culling(r, RENDER_CULLING_CCW)) == LSRERR_OK) {
-                if ((result = render_set_fog(r, a->fog)) == LSRERR_OK) {
-                    if ((result = render_set_fog_color(r, 0xFFCCCCCC)) == LSRERR_OK) {
-                        if ((result = render_set_fog_range(r, 0.2f, 10.0f)) == LSRERR_OK) {
-                            if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
-                                result = render_set_draw_mode(r, a->mode);
+                if ((result = render_set_fill(r, a->fill)) == LSRERR_OK) {
+                    if ((result = render_set_fog(r, a->fog)) == LSRERR_OK) {
+                        if ((result = render_set_fog_color(r, 0xFFCCCCCC)) == LSRERR_OK) {
+                            if ((result = render_set_fog_range(r, 0.2f, 10.0f)) == LSRERR_OK) {
+                                if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
+                                    result = render_set_draw_mode(r, a->mode);
+                                }
                             }
                         }
                     }
@@ -461,9 +473,11 @@ int app_render_ui(app* a, f64 time) {
         && (result = render_set_blending(r, RENDER_BLENDING_ENABLED)) == LSRERR_OK) {
         if ((result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
             if ((result = render_set_culling(r, RENDER_CULLING_NONE)) == LSRERR_OK) {
-                if ((result = render_set_fog(r, RENDER_FOG_NONE)) == LSRERR_OK) {
-                    if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
-                        result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+                if ((result = render_set_fill(r, RENDER_FILL_SOLID)) == LSRERR_OK) {
+                    if ((result = render_set_fog(r, RENDER_FOG_NONE)) == LSRERR_OK) {
+                        if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
+                            result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+                        }
                     }
                 }
             }
@@ -474,16 +488,23 @@ int app_render_ui(app* a, f64 time) {
     if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
         char message[128];
 
-        const char* fog_mode = "N";
+        const char* fog_mode = "None";
         switch (a->fog) {
-        case RENDER_FOG_LINEAR: { fog_mode = "L"; } break;
-        case RENDER_FOG_EXPONENTIAL: { fog_mode = "E"; } break;
-        case RENDER_FOG_EXPONENTIAL_SQUARED: { fog_mode = "ES"; } break;
+        case RENDER_FOG_LINEAR: { fog_mode = "Linear"; } break;
+        case RENDER_FOG_EXPONENTIAL: { fog_mode = "Exp"; } break;
+        case RENDER_FOG_EXPONENTIAL_SQUARED: { fog_mode = "Exp^2"; } break;
+        }
+
+        const char* fill_mode = "Points";
+        switch (a->fill) {
+        case RENDER_FILL_SOLID: { fill_mode = "Solid"; } break;
+        case RENDER_FILL_WIRE: { fill_mode = "Wire"; } break;
         }
 
         sprintf(message,
-            "FPS: %5d\r\nMode: %s Fog: %s\r\nCamera: %.2f %.2f %.2f",
-            (int)(1.0 / time), a->mode == RENDER_DRAW_MODE_POINTS ? "P" : "T", fog_mode,
+            "FPS: %5d\r\nClip: %s\r\nMode: %s\r\nFill: %s\r\nFog: %s\r\nCamera: %.2f %.2f %.2f",
+            (int)(1.0 / time), a->clipping == RENDER_CLIPPING_ENABLED ? "On" : "Off",
+            a->mode == RENDER_DRAW_MODE_POINTS ? "Points" : "Triangles", fill_mode, fog_mode,
             a->scene->camera->position.x, a->scene->camera->position.y, a->scene->camera->position.z);
 
         if ((result = app_render_text(a, 2, 0, message)) != LSRERR_OK) {

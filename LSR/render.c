@@ -23,6 +23,7 @@ struct render {
         render_blending blending;
         render_clipping clipping;
         render_culling culling;
+        render_fill fill;
         struct {
             render_fog mode;
             f32 density;
@@ -110,6 +111,7 @@ int render_create(render** outObj) {
     r->settings.clipping = RENDER_CLIPPING_ENABLED;
     r->settings.culling = RENDER_CULLING_CCW;
     r->settings.depth = RENDER_DEPTH_BUFFER_Z;
+    r->settings.fill = RENDER_FILL_POINT;// RENDER_FILL_SOLID;
     r->settings.mode = RENDER_DRAW_MODE_TRIANGLES;
 
     r->settings.fog.color.a = 1.0f;
@@ -196,6 +198,20 @@ int render_set_culling(render* r, render_culling culling) {
     }
 
     r->settings.culling = culling;
+
+    return LSRERR_OK;
+}
+
+int render_set_fill(render* r, render_fill fill) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (fill < RENDER_FILL_POINT || fill >= RENDER_FILL_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.fill = fill;
 
     return LSRERR_OK;
 }
@@ -466,7 +482,7 @@ int render_points(render* r, const f32m4* wvp,
         out->normal = in->normal;
         out->uv = in->uv;
 
-        if ((result == f32x4_set_color(&out->color, in->color)) != LSRERR_OK) {
+        if ((result = f32x4_set_color(&out->color, in->color)) != LSRERR_OK) {
             return result;
         }
     }
@@ -806,8 +822,7 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
         }
     }
 
-    const f32 area = fabsf(signed_area);
-    const f32 inv_area = 1.0f / area;
+    const f32 inv_area = 1.0f / fabsf(signed_area);
 
     // Compute triangle bounding box
     const f32 min_x = min(x0, min(x1, x2));
@@ -847,13 +862,13 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
     // Loop over every pixel in the bounding box
     for (int y = start_y; y <= end_y; y++) {
         for (int x = start_x; x <= end_x; x++) {
-            const f32 px = (float)x + 0.5f; // Pixel center coordinate
-            const f32 py = (float)y + 0.5f;
+            // Pixel center coordinate
+            const f32x2 p = { (f32)x + 0.5f, (f32)y + 0.5f };
 
             // Edge functions (Barycentric weights)
-            f32 w0 = ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) * inv_area;
-            f32 w1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) * inv_area;
-            f32 w2 = ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) * inv_area;
+            f32 w0 = ((x2 - x1) * (p.y - y1) - (y2 - y1) * (p.x - x1)) * inv_area; // Alternative name: alpha
+            f32 w1 = ((x0 - x2) * (p.y - y2) - (y0 - y2) * (p.x - x2)) * inv_area; // Alternative name: beta
+            f32 w2 = ((x1 - x0) * (p.y - y0) - (y1 - y0) * (p.x - x0)) * inv_area; // Alternative name: gamma
 
             // Flip the signs so containment check works universally
             if (signed_area < 0.0f) {
@@ -861,10 +876,27 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
             }
 
             // If pixel center is inside all three edges
-            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+            int fill = w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f;
+            switch (r->settings.fill) {
+            case RENDER_FILL_POINT: {
+                fill = (floorf(x0) == (f32)x && floorf(y0) == (f32)y)
+                    || (floorf(x1) == (f32)x && floorf(y1) == (f32)y)
+                    || (floorf(x2) == (f32)x && floorf(y2) == (f32)y);
+            } break;
+            case RENDER_FILL_WIRE: {
+                if (fill) {
+                    const f32 thickness = 0.02f;
+                    fill = w0 < thickness || w1 < thickness || w2 < thickness;
+                }
+            } break;
+            }
+
+            // Compute and draw pixel
+            if (fill) {
                 // Interpolate 1/W for depth testing and perspective correction
                 const f32 interpolated_inv_w = w0 * w0_inv + w1 * w1_inv + w2 * w2_inv;
                 const f32 current_w = 1.0f / interpolated_inv_w; // True linear depth
+                const f32 current_z = (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w;
 
                 int draw = TRUE;
                 f32 interpolated_depth = INFINITY;
@@ -876,9 +908,7 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                         return result;
                     }
 
-                    interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z
-                        ? (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w
-                        : current_w;
+                    interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z ? current_z : current_w;
 
                     draw = interpolated_depth < depth;
                 }
@@ -918,11 +948,8 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                     }
 
                     if (r->settings.fog.mode != RENDER_FOG_NONE) {
-                        const f32 linear_depth =
-                            (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w;
-
                         f32 factor = 0.0f;
-                        if ((result = render_get_fog_factor(r, linear_depth, &factor)) != LSRERR_OK) {
+                        if ((result = render_get_fog_factor(r, current_z, &factor)) != LSRERR_OK) {
                             return result;
                         }
 

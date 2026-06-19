@@ -133,7 +133,7 @@ int font_create(const char* name, int size, int bold, u32 front, u32 back, font*
             // Store glyph info
             f->glyphs[i].x = current_x;
             f->glyphs[i].y = current_y;
-            f->glyphs[i].width = gm.gmBlackBoxX;
+            f->glyphs[i].width = gm.gmBlackBoxX + 1;
             f->glyphs[i].height = gm.gmBlackBoxY;
             f->glyphs[i].advanceX = gm.gmCellIncX;
             f->glyphs[i].advanceY = gm.gmCellIncY;
