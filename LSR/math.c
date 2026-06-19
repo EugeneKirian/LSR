@@ -5,6 +5,8 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
+#define FIELD_OF_VIEW   60.0f   /* 60 degrees */
+
 int f32x3_add_f32x3(f32x3* v, const f32x3* value) {
     if (v == NULL || value == NULL) {
         return LSRERR_INVALID_ARGUMENT;
@@ -73,6 +75,34 @@ int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3*
     return result;
 }
 
+int f32x4_get_color(const f32x4* v, u32* color) {
+    if (v == NULL || color == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    const u32 a = (u32)floorf(v->a * 255.0f);
+    const u32 r = (u32)floorf(v->r * 255.0f);
+    const u32 g = (u32)floorf(v->g * 255.0f);
+    const u32 b = (u32)floorf(v->b * 255.0f);
+
+    *color = (a << 24) | (r << 16) | (g << 8) | b;
+
+    return LSRERR_OK;
+}
+
+int f32x4_set_color(f32x4* v, u32 color) {
+    if (v == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    v->a = ((color >> 24) & 0xFF) / 255.0f;
+    v->r = ((color >> 16) & 0xFF) / 255.0f;
+    v->g = ((color >> 8) & 0xFF) / 255.0f;
+    v->b = ((color >> 0) & 0xFF) / 255.0f;
+
+    return LSRERR_OK;
+}
+
 int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result) {
     if (v == NULL || m == NULL || result == NULL) {
         return LSRERR_INVALID_ARGUMENT;
@@ -126,7 +156,7 @@ int f32m4_projection(f32m4* m, int w, int h, f32 min, f32 max) {
     }
 
     const f32 a = (f32)w / (f32)h;
-    const f32 fov = 90.0f * (f32)(M_PI / 180.0); // 90 degrees
+    const f32 fov = FIELD_OF_VIEW * (f32)(M_PI / 180.0);
 
     const f32 tan_fov = tanf(fov / 2.0f);
 
@@ -211,43 +241,41 @@ u32 power_of_two_round_up(u32 value) {
     return value + 1;
 }
 
-u32 color_blend(u32 back, u32 front) {
-    const u32 front_alpha = (front >> 24) & 0xFF;
-
-    if (front_alpha == 255) {
-        return front;
-    }
-    
-    if (front_alpha == 0) {
-        return back;
+int f32x4_interpolate(f32x4* result, const f32x4* value, f32 t) {
+    if (result == NULL || value == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
     }
 
-    const u32 back_alpha = (back >> 24) & 0xFF;
+    result->a = result->a * t + value->a * (1.0f - t);
+    result->r = result->r * t + value->r * (1.0f - t);
+    result->g = result->g * t + value->g * (1.0f - t);
+    result->b = result->b * t + value->b * (1.0f - t);
 
-    if (back_alpha == 0) {
-        return front;
+    return LSRERR_OK;
+}
+
+int f32x4_blend_color(f32x4* result, const f32x4* back, const f32x4* front) {
+    if (result == NULL || back == NULL || front == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
     }
 
-    const f32 fa = (f32)front_alpha / 255.0f;
-    const f32 fr = (f32)((front >> 16) & 0xFF) / 255.0f;
-    const f32 fg = (f32)((front >> 8) & 0xFF) / 255.0f;
-    const f32 fb = (f32)((front >> 0) & 0xFF) / 255.0f;
+    if (front->a == 0.0f) {
+        CopyMemory(result, back, sizeof(f32x4));
+        return LSRERR_OK;
+    }
+    else if (back->a == 0.0f || front->a == 1.0f) {
+        CopyMemory(result, front, sizeof(f32x4));
+        return LSRERR_OK;
+    }
 
-    const f32 ba = (f32)back_alpha / 255.0f;
-    const f32 br = (f32)((back >> 16) & 0xFF) / 255.0f;
-    const f32 bg = (f32)((back >> 8) & 0xFF) / 255.0f;
-    const f32 bb = (f32)((back >> 0) & 0xFF) / 255.0f;
-
+    const f32 ba = back->a;
+    const f32 fa = front->a;
     const f32 ra = fa + (ba * (1.0f - fa));
-    const f32 rr = ((fr * fa) + (br * ba * (1.0f - fa))) / ra;
-    const f32 rg = ((fg * fa) + (bg * ba * (1.0f - fa))) / ra;
-    const f32 rb = ((fb * fa) + (bb * ba * (1.0f - fa))) / ra;
 
-    const u32 oa = (u8)roundf(ra * 255.0f);
-    const u32 or = (u8)roundf(rr * 255.0f);
-    const u32 og = (u8)roundf(rg * 255.0f);
-    const u32 ob = (u8)roundf(rb * 255.0f);
+    result->a = ra;
+    result->r = ((front->r * fa) + (back->r * ba * (1.0f - fa))) / ra;
+    result->g = ((front->g * fa) + (back->g * ba * (1.0f - fa))) / ra;
+    result->b = ((front->b * fa) + (back->b * ba * (1.0f - fa))) / ra;
 
-    return ((oa & 0xFF) << 24)
-        | ((or & 0xFF) << 16) | ((og & 0xFF) << 8) | (ob & 0xFF);
+    return LSRERR_OK;
 }

@@ -30,7 +30,21 @@ typedef struct f32x3 {
 } f32x3;
 
 typedef struct f32x4 {
-    f32 x, y, z, w;
+    union {
+        struct {
+            float x;
+            float y;
+            float z;
+            float w;
+        };
+
+        struct {
+            float r;
+            float g;
+            float b;
+            float a;
+        };
+    };
 } f32x4;
 
 typedef struct vertex {
@@ -81,6 +95,10 @@ int f32x3_cross_product(const f32x3* v1, const f32x3* v2, f32x3* cp);
 int f32x3_normalize(const f32x3* v, f32x3* n);
 int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3* n);
 
+int f32x4_interpolate(f32x4* result, const f32x4* value, f32 t);
+int f32x4_blend_color(f32x4* result, const f32x4* back, const f32x4* front);
+int f32x4_get_color(const f32x4* v, u32* color);
+int f32x4_set_color(f32x4* v, u32 color);
 int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result);
 
 int f32m4_identity(f32m4* m);
@@ -95,5 +113,3 @@ inline f32 clampf(f32 value, f32 min, f32 max) {
 int transform_f32m4(const transform* t, f32m4* m);
 
 u32 power_of_two_round_up(u32 value);
-
-u32 color_blend(u32 back, u32 front);

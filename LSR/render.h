@@ -21,10 +21,12 @@ typedef enum render_culling {
 } render_culling;
 
 typedef enum render_fog {
-    RENDER_FOG_NONE         = 0,
-    RENDER_FOR_LINEAR       = 1,
-    RENDER_FOG_COUNT        = 2,
-    RENDER_FOG_FORCE_DWORD  = 0x7FFFFFFF
+    RENDER_FOG_NONE                 = 0,
+    RENDER_FOG_LINEAR               = 1,
+    RENDER_FOG_EXPONENTIAL          = 2,
+    RENDER_FOG_EXPONENTIAL_SQUARED  = 3,
+    RENDER_FOG_COUNT                = 4,
+    RENDER_FOG_FORCE_DWORD          = 0x7FFFFFFF
 } render_fog;
 
 typedef enum render_draw_mode {
@@ -70,6 +72,9 @@ int render_set_blending(render* r, render_blending blending);
 int render_set_clipping(render* r, render_clipping clipping);
 int render_set_culling(render* r, render_culling culling);
 int render_set_fog(render* r, render_fog fog);
+int render_set_fog_color(render* r, u32 color);
+int render_set_fog_density(render* r, f32 density);
+int render_set_fog_range(render* r, f32 start, f32 end);
 int render_set_texture(render* r, const texture* t);
 int render_set_matrix(render* r, render_matrix type, const f32m4* matrix);
 int render_set_viewport(render* r, const render_viewport* vp);

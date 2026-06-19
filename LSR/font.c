@@ -22,6 +22,8 @@ struct font {
 
 static const MAT2 identity = { {0,1}, {0,0}, {0,0}, {0,1} };
 
+static u32 color_blend(u32 back, u32 front);
+
 static int font_allocate(const char* name, font** outObj) {
     if (name == NULL || outObj == NULL) {
         return LSRERR_INVALID_ARGUMENT;
@@ -142,7 +144,7 @@ int font_create(const char* name, int size, int bold, u32 front, u32 back, font*
             current_x += max_width + FONT_MAX_PADDING_SIZE;
 
             // Check if we need to move to next row
-            if (current_x + max_width > f->texture.width) {
+            if (current_x + max_width > (u32)f->texture.width) {
                 current_x = FONT_MAX_PADDING_SIZE;
                 current_y += max_height + FONT_MAX_PADDING_SIZE;
             }
@@ -182,13 +184,13 @@ int font_create(const char* name, int size, int bold, u32 front, u32 back, font*
                             + (f->glyphs[i].y + y) * f->texture.width * sizeof(u32));
 
                         for (u32 x = 0; x < gm.gmBlackBoxX; x++) {
-                            u32 index = y * gm.gmBlackBoxX + x;
+                            const u32 index = y * gm.gmBlackBoxX + x;
                             if (index < curent_buffer_size) {
-                                u32 scale = (u32)buffer[y * pitch + x];
-                                u32 alpha = scale == 64 ? 255 : ((255 * scale) / 64);
+                                const u32 scale = (u32)buffer[y * pitch + x];
+                                const u32 alpha = scale == 64 ? 255 : ((255 * scale) / 64);
 
                                 // Assemble final blended color
-                                u32 color = color_blend(back,
+                                const u32 color = color_blend(back,
                                     ((alpha & 0xFF) << 24) | (front & 0x00FFFFFF));
 
                                 pixels[f->glyphs[i].x + x] = color;
@@ -295,4 +297,45 @@ int font_get_height(const font* f, int* height) {
     *height = f->metrics.tmHeight + f->metrics.tmExternalLeading;
 
     return LSRERR_OK;
+}
+
+u32 color_blend(u32 back, u32 front) {
+    const u32 front_alpha = (front >> 24) & 0xFF;
+
+    if (front_alpha == 255) {
+        return front;
+    }
+
+    if (front_alpha == 0) {
+        return back;
+    }
+
+    const u32 back_alpha = (back >> 24) & 0xFF;
+
+    if (back_alpha == 0) {
+        return front;
+    }
+
+    const f32 fa = (f32)front_alpha / 255.0f;
+    const f32 fr = (f32)((front >> 16) & 0xFF) / 255.0f;
+    const f32 fg = (f32)((front >> 8) & 0xFF) / 255.0f;
+    const f32 fb = (f32)((front >> 0) & 0xFF) / 255.0f;
+
+    const f32 ba = (f32)back_alpha / 255.0f;
+    const f32 br = (f32)((back >> 16) & 0xFF) / 255.0f;
+    const f32 bg = (f32)((back >> 8) & 0xFF) / 255.0f;
+    const f32 bb = (f32)((back >> 0) & 0xFF) / 255.0f;
+
+    const f32 ra = fa + (ba * (1.0f - fa));
+    const f32 rr = ((fr * fa) + (br * ba * (1.0f - fa))) / ra;
+    const f32 rg = ((fg * fa) + (bg * ba * (1.0f - fa))) / ra;
+    const f32 rb = ((fb * fa) + (bb * ba * (1.0f - fa))) / ra;
+
+    const u32 oa = (u8)roundf(ra * 255.0f);
+    const u32 or = (u8)roundf(rr * 255.0f);
+    const u32 og = (u8)roundf(rg * 255.0f);
+    const u32 ob = (u8)roundf(rb * 255.0f);
+
+    return ((oa & 0xFF) << 24)
+        | ((or &0xFF) << 16) | ((og & 0xFF) << 8) | (ob & 0xFF);
 }

@@ -198,11 +198,11 @@ int camera_look_at(camera* c, const f32x3* target) {
     // 4. Calculate Yaw (Rotation around Y-axis)
     // In D3D LH, Yaw = 0 is +Z, Yaw = 90 deg is +X.
     // Therefore, atan2f(x, z) is used.
-    f32 yaw_rad = atan2f(dx, dz);
+    const f32 yaw_rad = atan2f(dx, dz);
 
     // 5. Calculate Pitch (Rotation around X-axis)
     // Pitch is the angle between the ground plane (xz_dist) and the vertical target (dy)
-    f32 pitch_rad = atan2f(dy, xz_dist);
+    const f32 pitch_rad = atan2f(dy, xz_dist);
 
     // 6. Convert Radians back to Degrees and update the camera asset
     c->rotation.yaw = yaw_rad * (f32)(180.0 / M_PI);

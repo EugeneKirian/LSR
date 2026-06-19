@@ -10,7 +10,7 @@
 typedef struct rv {
     f32x4 position;
     f32x3 normal;
-    u32 color;
+    f32x4 color;
     f32x2 uv;
 } rv;
 
@@ -23,7 +23,12 @@ struct render {
         render_blending blending;
         render_clipping clipping;
         render_culling culling;
-        render_fog fog;
+        struct {
+            render_fog mode;
+            f32 density;
+            f32 start, end;
+            f32x4 color;
+        } fog;
         render_draw_mode mode;
         render_depth_buffer depth;
     } settings;
@@ -52,6 +57,8 @@ static int clip_polygon_against_plane(const rv* in_vertices, int in_count,
 
 static int frustrum_is_outside_plane(const rv* v, frustrum_plane plane);
 static f32 frustrum_get_plane_distance(const rv* v, frustrum_plane plane);
+
+static int render_get_fog_factor(const render* r, f32 depth, f32* factor);
 
 static int render_points(render* r, const f32m4* wvp,
     const vertex* vertexes, const int* indexes, size_t index_count);
@@ -104,6 +111,15 @@ int render_create(render** outObj) {
     r->settings.culling = RENDER_CULLING_CCW;
     r->settings.depth = RENDER_DEPTH_BUFFER_Z;
     r->settings.mode = RENDER_DRAW_MODE_TRIANGLES;
+
+    r->settings.fog.color.a = 1.0f;
+    r->settings.fog.color.r = 1.0f;
+    r->settings.fog.color.g = 1.0f;
+    r->settings.fog.color.b = 1.0f;
+    r->settings.fog.mode = RENDER_FOG_NONE;
+    r->settings.fog.density = 0.33f;
+    r->settings.fog.start = 1.0f;
+    r->settings.fog.end = 100.0f;
 
     *outObj = r;
 
@@ -193,7 +209,36 @@ int render_set_fog(render* r, render_fog fog) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    r->settings.fog = fog;
+    r->settings.fog.mode = fog;
+
+    return LSRERR_OK;
+}
+
+int render_set_fog_color(render* r, u32 color) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    return f32x4_set_color(&r->settings.fog.color, color);
+}
+
+int render_set_fog_density(render* r, f32 density) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.fog.density = density;
+
+    return LSRERR_OK;
+}
+
+int render_set_fog_range(render* r, f32 start, f32 end) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.fog.start = start;
+    r->settings.fog.end = end;
 
     return LSRERR_OK;
 }
@@ -419,8 +464,11 @@ int render_points(render* r, const f32m4* wvp,
         }
 
         out->normal = in->normal;
-        out->color = in->color;
         out->uv = in->uv;
+
+        if ((result == f32x4_set_color(&out->color, in->color)) != LSRERR_OK) {
+            return result;
+        }
     }
 
     // Perspective divide: Clip space -> NDC space
@@ -458,7 +506,8 @@ int render_points(render* r, const f32m4* wvp,
             }
 
             if (draw) {
-                u32 color = v->color;
+                f32x4 color;
+                CopyMemory(&color, &v->color, sizeof(f32x4));
 
                 // Sample texture to get pixel color
                 if (c != NULL) {
@@ -467,16 +516,30 @@ int render_points(render* r, const f32m4* wvp,
                     const int xc = (int)((f32)(c->width - 1) * uvx);
                     const int yc = (int)((f32)(c->height - 1) * uvy);
 
-                    // TOOD texture sampling looks off
-                    if ((result = texture_get_point_color(c, xc, yc, &color)) != LSRERR_OK) {
+                    u32 sample_color = 0;
+                    if ((result = texture_get_point_color(c, xc, yc, &sample_color)) != LSRERR_OK) {
                         return result;
                     }
+
+                    f32x4 texture_color;
+                    if ((result = f32x4_set_color(&texture_color, sample_color)) != LSRERR_OK) {
+                        return result;
+                    }
+
+                    // Blend vertex and texture colors
+                    color.a *= texture_color.a;
+                    color.r *= texture_color.r;
+                    color.g *= texture_color.g;
+                    color.b *= texture_color.b;
                 }
 
-                // TODO blend vertex and texture color
+                u32 final_color = 0;
+                if ((result = f32x4_get_color(&color, &final_color)) != LSRERR_OK) {
+                    return result;
+                }
 
                 // Draw pixel and update depth buffer if needed
-                if ((result = texture_set_point_color(s, x, y, color)) == LSRERR_OK) {
+                if ((result = texture_set_point_color(s, x, y, final_color)) == LSRERR_OK) {
                     if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
                         if ((result = texture_set_point_depth(r->depth, x, y,
                             r->settings.depth == RENDER_DEPTH_BUFFER_Z ? v->position.z : v->position.w)) != LSRERR_OK) {
@@ -531,8 +594,11 @@ int render_triangles(render* r, const f32m4* wvp,
             }
 
             tri[v].normal = src->normal;
-            tri[v].color = src->color;
             tri[v].uv = src->uv;
+
+            if ((result = f32x4_set_color(&tri[v].color, src->color)) != LSRERR_OK) {
+                return result;
+            }
         }
 
         // Trivial rejection optimization: If all 3 vertices are out of any single plane, skip!
@@ -603,6 +669,7 @@ int render_triangles(render* r, const f32m4* wvp,
             render_rasterize_triangle(r, tri);
         }
     }
+
     return LSRERR_OK;
 }
 
@@ -637,16 +704,8 @@ f32 frustrum_get_plane_distance(const rv* v, frustrum_plane plane) {
     return 0.0f;
 }
 
-static u32 lerp_color(u32 c1, u32 c2, f32 t) {
-    u32 a = (u32)(((c1 >> 24) & 0xFF) + t * (((c2 >> 24) & 0xFF) - ((c1 >> 24) & 0xFF)));
-    u32 r = (u32)(((c1 >> 16) & 0xFF) + t * (((c2 >> 16) & 0xFF) - ((c1 >> 16) & 0xFF)));
-    u32 g = (u32)(((c1 >> 8) & 0xFF) + t * (((c2 >> 8) & 0xFF) - ((c1 >> 8) & 0xFF)));
-    u32 b = (u32)((c1 & 0xFF) + t * ((c2 & 0xFF) - (c1 & 0xFF)));
-    return (a << 24) | (r << 16) | (g << 8) | b;
-}
-
 // Linearly interpolates all standard attributes between two vertices at time t
-static rv rv_lerp(const rv* v1, const rv* v2, f32 t) {
+static rv rv_lerp(const rv* v1, const rv* v2, f32 t) { // TODO
     rv out;
     out.position.x = v1->position.x + t * (v2->position.x - v1->position.x);
     out.position.y = v1->position.y + t * (v2->position.y - v1->position.y);
@@ -660,7 +719,11 @@ static rv rv_lerp(const rv* v1, const rv* v2, f32 t) {
     out.uv.x = v1->uv.x + t * (v2->uv.x - v1->uv.x);
     out.uv.y = v1->uv.y + t * (v2->uv.y - v1->uv.y);
 
-    out.color = lerp_color(v1->color, v2->color, t);
+    out.color.a = v1->color.a + t * (v2->color.a - v1->color.a);
+    out.color.r = v1->color.r + t * (v2->color.r - v1->color.r);
+    out.color.g = v1->color.g + t * (v2->color.g - v1->color.g);
+    out.color.b = v1->color.b + t * (v2->color.b - v1->color.b);
+
     return out;
 }
 
@@ -674,8 +737,8 @@ static int clip_polygon_against_plane(const rv* in_vertices, int in_count,
     for (int i = 0; i < in_count; i++) {
         const rv* p = &in_vertices[i];
 
-        int s_outside = frustrum_is_outside_plane(s, plane);
-        int p_outside = frustrum_is_outside_plane(p, plane);
+        const int s_outside = frustrum_is_outside_plane(s, plane);
+        const int p_outside = frustrum_is_outside_plane(p, plane);
 
         if (p_outside) {
             if (!s_outside) {
@@ -764,24 +827,9 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
     const f32 w2_inv = 1.0f / v2->position.w;
 
     // Color interpolation
-    const f32 v0ca = (f32)((v0->color & 0xFF000000) >> 24) / 255.0f;
-    const f32 v0cr = (f32)((v0->color & 0x00FF0000) >> 16) / 255.0f;
-    const f32 v0cg = (f32)((v0->color & 0x0000FF00) >> 8) / 255.0f;
-    const f32 v0cb = (f32)((v0->color & 0x000000FF) >> 0) / 255.0f;
-
-    const f32 v1ca = (f32)((v1->color & 0xFF000000) >> 24) / 255.0f;
-    const f32 v1cr = (f32)((v1->color & 0x00FF0000) >> 16) / 255.0f;
-    const f32 v1cg = (f32)((v1->color & 0x0000FF00) >> 8) / 255.0f;
-    const f32 v1cb = (f32)((v1->color & 0x000000FF) >> 0) / 255.0f;
-
-    const f32 v2ca = (f32)((v2->color & 0xFF000000) >> 24) / 255.0f;
-    const f32 v2cr = (f32)((v2->color & 0x00FF0000) >> 16) / 255.0f;
-    const f32 v2cg = (f32)((v2->color & 0x0000FF00) >> 8) / 255.0f;
-    const f32 v2cb = (f32)((v2->color & 0x000000FF) >> 0) / 255.0f;
-
-    const f32 r0_w = v0cr * w0_inv, g0_w = v0cg * w0_inv, b0_w = v0cb * w0_inv, a0_w = v0ca * w0_inv;
-    const f32 r1_w = v1cr * w1_inv, g1_w = v1cg * w1_inv, b1_w = v1cb * w1_inv, a1_w = v1ca * w1_inv;
-    const f32 r2_w = v2cr * w2_inv, g2_w = v2cg * w2_inv, b2_w = v2cb * w2_inv, a2_w = v2ca * w2_inv;
+    const f32x4 w0_color = { v0->color.a * w0_inv, v0->color.r * w0_inv, v0->color.g * w0_inv, v0->color.b * w0_inv };
+    const f32x4 w1_color = { v1->color.a * w1_inv, v1->color.r * w1_inv, v1->color.g * w1_inv, v1->color.b * w1_inv };
+    const f32x4 w2_color = { v2->color.a * w2_inv, v2->color.r * w2_inv, v2->color.g * w2_inv, v2->color.b * w2_inv };
 
     // Texture coordinate interpolation
     const f32 u0_w = v0->uv.x * w0_inv, v0_w = v0->uv.y * w0_inv;
@@ -803,28 +851,20 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
             const f32 py = (float)y + 0.5f;
 
             // Edge functions (Barycentric weights)
-            const f32 w0 = ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) * inv_area;
-            const f32 w1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) * inv_area;
-            const f32 w2 = ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) * inv_area;
-
-            f32 validation_w0 = w0, validation_w1 = w1, validation_w2 = w2;
+            f32 w0 = ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) * inv_area;
+            f32 w1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) * inv_area;
+            f32 w2 = ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) * inv_area;
 
             // Flip the signs so containment check works universally
             if (signed_area < 0.0f) {
-                validation_w0 = -w0; validation_w1 = -w1; validation_w2 = -w2;
+                w0 = -w0; w1 = -w1; w2 = -w2;
             }
 
             // If pixel center is inside all three edges
-            if (validation_w0 >= 0.0f && validation_w1 >= 0.0f && validation_w2 >= 0.0f) {
-                // When calculating attributes, you MUST use the absolute (positive) 
-                // barycentric coordinates, otherwise your attributes/depth invert!
-                const f32 abs_w0 = fabsf(w0);
-                const f32 abs_w1 = fabsf(w1);
-                const f32 abs_w2 = fabsf(w2);
-
+            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
                 // Interpolate 1/W for depth testing and perspective correction
-                const f32 interpolated_inv_w = abs_w0 * w0_inv + abs_w1 * w1_inv + abs_w2 * w2_inv;
-                const f32 current_w = 1.0f / interpolated_inv_w;
+                const f32 interpolated_inv_w = w0 * w0_inv + w1 * w1_inv + w2 * w2_inv;
+                const f32 current_w = 1.0f / interpolated_inv_w; // True linear depth
 
                 int draw = TRUE;
                 f32 interpolated_depth = INFINITY;
@@ -837,54 +877,85 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                     }
 
                     interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z
-                        ? ((abs_w0 * v0->position.z + abs_w1 * v1->position.z + abs_w2 * v2->position.z) * current_w)
+                        ? (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w
                         : current_w;
 
                     draw = interpolated_depth < depth;
                 }
 
                 // Perspective correct attribute interpolation
-                f32 alpha = (abs_w0 * a0_w + abs_w1 * a1_w + abs_w2 * a2_w) * current_w;
-                f32 red = (abs_w0 * r0_w + abs_w1 * r1_w + abs_w2 * r2_w) * current_w;
-                f32 green = (abs_w0 * g0_w + abs_w1 * g1_w + abs_w2 * g2_w) * current_w;
-                f32 blue = (abs_w0 * b0_w + abs_w1 * b1_w + abs_w2 * b2_w) * current_w;
+                f32x4 color;
+                color.a = (w0 * w0_color.a + w1 * w1_color.a + w2 * w2_color.a) * current_w;
+                color.r = (w0 * w0_color.r + w1 * w1_color.r + w2 * w2_color.r) * current_w;
+                color.g = (w0 * w0_color.g + w1 * w1_color.g + w2 * w2_color.g) * current_w;
+                color.b = (w0 * w0_color.b + w1 * w1_color.b + w2 * w2_color.b) * current_w;
 
                 if (draw) {
                     // Sample texture to get pixel color
                     if (c != NULL) {
-                        const f32 u = (abs_w0 * u0_w + abs_w1 * u1_w + abs_w2 * u2_w) * current_w;
-                        const f32 v = (abs_w0 * v0_w + abs_w1 * v1_w + abs_w2 * v2_w) * current_w;
+                        const f32 u = (w0 * u0_w + w1 * u1_w + w2 * u2_w) * current_w;
+                        const f32 v = (w0 * v0_w + w1 * v1_w + w2 * v2_w) * current_w;
 
                         const int xc = (int)((f32)(c->width - 1) * u);
                         const int yc = (int)((f32)(c->height - 1) * v);
 
-                        // Get texture color
-                        u32 texture_color = 0;
-                        if ((result = texture_get_point_color(c, xc, yc, &texture_color)) != LSRERR_OK) {
+                        // Sample texture color
+                        u32 sample_color = 0;
+                        if ((result = texture_get_point_color(c, xc, yc, &sample_color)) != LSRERR_OK) {
                             return result;
                         }
 
-                        // Blend colors
-                        alpha *= (f32)((texture_color & 0xFF000000) >> 24) / 255.0f;
-                        red *= (f32)((texture_color & 0x00FF0000) >> 16) / 255.0f;
-                        green *= (f32)((texture_color & 0x0000FF00) >> 8) / 255.0f;
-                        blue *= (f32)((texture_color & 0x000000FF) >> 0) / 255.0f;
+                        f32x4 texture_color;
+                        if ((result = f32x4_set_color(&texture_color, sample_color)) != LSRERR_OK) {
+                            return result;
+                        }
+
+                        // Blend vertex and texture colors
+                        color.a *= texture_color.a;
+                        color.r *= texture_color.r;
+                        color.g *= texture_color.g;
+                        color.b *= texture_color.b;
                     }
 
-                    u32 color = ((u8)(255.0f * alpha) << 24)
-                        | ((u8)(255.0f * red) << 16) | ((u8)(255.0f * green) << 8) | ((u8)(255.0f * blue));
+                    if (r->settings.fog.mode != RENDER_FOG_NONE) {
+                        const f32 linear_depth =
+                            (w0 * v0->position.z + w1 * v1->position.z + w2 * v2->position.z) * current_w;
 
-                    if (r->settings.blending == RENDER_BLENDING_ENABLED) {
-                        u32 target = 0;
-                        if ((result = texture_get_point_color(r->surface, x, y, &target)) != LSRERR_OK) {
+                        f32 factor = 0.0f;
+                        if ((result = render_get_fog_factor(r, linear_depth, &factor)) != LSRERR_OK) {
                             return result;
                         }
 
-                        color = color_blend(target, color);
+                        if ((result = f32x4_interpolate(&color, &r->settings.fog.color, factor)) != LSRERR_OK) {
+                            return result;
+                        }
+                    }
+
+                    if ((result == LSRERR_OK)
+                        && r->settings.blending == RENDER_BLENDING_ENABLED) {
+                        u32 sample_color = 0;
+                        if ((result = texture_get_point_color(r->surface, x, y, &sample_color)) != LSRERR_OK) {
+                            return result;
+                        }
+
+                        f32x4 texture_color;
+                        if ((result = f32x4_set_color(&texture_color, sample_color)) != LSRERR_OK) {
+                            return result;
+                        }
+
+                        if ((result = f32x4_blend_color(&color, &texture_color, &color)) != LSRERR_OK) {
+                            return result;
+                        }
+                    }
+
+                    u32 final_color = 0;
+                    if ((result == LSRERR_OK)
+                        && (result = f32x4_get_color(&color, &final_color)) != LSRERR_OK) {
+                        return result;
                     }
 
                     // Draw pixel and update depth buffer if needed
-                    if ((result = texture_set_point_color(r->surface, x, y, color)) == LSRERR_OK) {
+                    if ((result = texture_set_point_color(r->surface, x, y, final_color)) == LSRERR_OK) {
                         if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
                             if ((result = texture_set_point_depth(r->depth, x, y, interpolated_depth)) != LSRERR_OK) {
                                 return result;
@@ -897,4 +968,35 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
     }
 
     return result;
+}
+
+int render_get_fog_factor(const render* r, f32 depth, f32* factor) {
+    if (r == NULL || factor == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    switch (r->settings.fog.mode) {
+    case RENDER_FOG_LINEAR: {
+        const f32 distance = r->settings.fog.end - r->settings.fog.start;
+
+        if (r->settings.fog.end <= 0.0f || fabsf(distance) < 1e-5f) {
+            *factor = 0.0f;
+            return LSRERR_OK;
+        }
+
+        *factor = clampf((r->settings.fog.end - depth) / distance, 0.0f, 1.0f);
+    } break;
+    case RENDER_FOG_EXPONENTIAL: {
+        *factor = clampf(expf(-r->settings.fog.density * depth), 0.0f, 1.0f);
+    } break;
+    case RENDER_FOG_EXPONENTIAL_SQUARED: {
+        const f32 dd = r->settings.fog.density * depth;
+        *factor = clampf(expf(-(dd * dd)), 0.0f, 1.0f);
+    } break;
+    default: {
+        *factor = 0.0f;
+    } break;
+    }
+
+    return LSRERR_OK;
 }

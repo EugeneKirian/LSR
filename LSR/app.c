@@ -15,6 +15,9 @@
 #define QUAD_INDEX_COUNT        6
 #define QUAD_VERTEX_COUNT       4
 
+#define Z_NEAR                  (0.0f)
+#define Z_FAR                   (1.0f)
+
 struct app {
     scene*              scene;
     render*             render;
@@ -27,6 +30,7 @@ struct app {
         POINT           previous;
     } mouse;
     render_draw_mode    mode;
+    render_fog          fog;
     font*               font;
 };
 
@@ -75,6 +79,7 @@ int app_create(app** outObj) {
 
     InitializeCriticalSection(&a->lock);
 
+    a->fog = RENDER_FOG_LINEAR;
     a->mode = RENDER_DRAW_MODE_TRIANGLES;
 
     *outObj = a;
@@ -163,8 +168,9 @@ int app_resize_surface(app* a, int w, int h) {
         vp.y = 0;
         vp.width = w;
         vp.height = h;
-        vp.min = 0.0f;
-        vp.max = 1.0f;
+        vp.min = Z_NEAR;
+        vp.max = Z_FAR;
+
         if ((result = render_set_viewport(a->render, &vp)) == LSRERR_OK){
             result = render_set_render_target(a->render, a->surface);
         }
@@ -258,6 +264,9 @@ int app_key_down(app* a, int key) {
     } break;
     case 'M': {
         a->mode = (a->mode + 1) % RENDER_DRAW_MODE_COUNT;
+    } break;
+    case 'F': {
+        a->fog = (a->fog + 1) % RENDER_FOG_COUNT;
     } break;
     }
 
@@ -354,7 +363,7 @@ int app_render_scene(app* a, f64 time) {
 
     // 1. Set projection and view matrixes
     f32m4 matrix;
-    if ((result = f32m4_projection(&matrix, a->surface->width, a->surface->height, 0.0f, 1.0f)) == LSRERR_OK) {
+    if ((result = f32m4_projection(&matrix, a->surface->width, a->surface->height, Z_NEAR, Z_FAR)) == LSRERR_OK) {
         if ((result = render_set_matrix(r, RENDER_MATRIX_PROJECTION, &matrix)) == LSRERR_OK) {
             if ((result = camera_get_matrix(s->camera, &matrix)) == LSRERR_OK) {
                 result = render_set_matrix(r, RENDER_MATRIX_VIEW, &matrix);
@@ -367,8 +376,14 @@ int app_render_scene(app* a, f64 time) {
         && (result = render_set_blending(r, RENDER_BLENDING_DISABLED)) == LSRERR_OK) {
         if ((result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
             if ((result = render_set_culling(r, RENDER_CULLING_CCW)) == LSRERR_OK) {
-                if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
-                    result = render_set_draw_mode(r, a->mode);
+                if ((result = render_set_fog(r, a->fog)) == LSRERR_OK) {
+                    if ((result = render_set_fog_color(r, 0xFFCCCCCC)) == LSRERR_OK) {
+                        if ((result = render_set_fog_range(r, 0.2f, 10.0f)) == LSRERR_OK) {
+                            if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_Z)) == LSRERR_OK) {
+                                result = render_set_draw_mode(r, a->mode);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -431,7 +446,7 @@ int app_render_ui(app* a, f64 time) {
 
     // 1. Set projection, view, and world matrixes
     f32m4 matrix;
-    if ((result = f32m4_orthographic(&matrix, a->surface->width, a->surface->height, 0.0f, 1.0f)) == LSRERR_OK) {
+    if ((result = f32m4_orthographic(&matrix, a->surface->width, a->surface->height, Z_NEAR, Z_FAR)) == LSRERR_OK) {
         if ((result = render_set_matrix(r, RENDER_MATRIX_PROJECTION, &matrix)) == LSRERR_OK) {
             if ((result = f32m4_identity(&matrix)) == LSRERR_OK) {
                 if ((result = render_set_matrix(r, RENDER_MATRIX_VIEW, &matrix)) == LSRERR_OK) {
@@ -446,8 +461,10 @@ int app_render_ui(app* a, f64 time) {
         && (result = render_set_blending(r, RENDER_BLENDING_ENABLED)) == LSRERR_OK) {
         if ((result = render_set_clipping(r, RENDER_CLIPPING_ENABLED)) == LSRERR_OK) {
             if ((result = render_set_culling(r, RENDER_CULLING_NONE)) == LSRERR_OK) {
-                if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
-                    result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+                if ((result = render_set_fog(r, RENDER_FOG_NONE)) == LSRERR_OK) {
+                    if ((result = render_set_depth_buffer(r, RENDER_DEPTH_BUFFER_NONE)) == LSRERR_OK) {
+                        result = render_set_draw_mode(r, RENDER_DRAW_MODE_TRIANGLES);
+                    }
                 }
             }
         }
@@ -456,9 +473,17 @@ int app_render_ui(app* a, f64 time) {
     // 3. Render the UI
     if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
         char message[128];
+
+        const char* fog_mode = "N";
+        switch (a->fog) {
+        case RENDER_FOG_LINEAR: { fog_mode = "L"; } break;
+        case RENDER_FOG_EXPONENTIAL: { fog_mode = "E"; } break;
+        case RENDER_FOG_EXPONENTIAL_SQUARED: { fog_mode = "ES"; } break;
+        }
+
         sprintf(message,
-            "FPS: %5d\r\nMode: %s\r\nCamera: %f %f %f",
-            (int)(1.0 / time), a->mode == RENDER_DRAW_MODE_POINTS ? "Points" : "Triangles",
+            "FPS: %5d\r\nMode: %s Fog: %s\r\nCamera: %.2f %.2f %.2f",
+            (int)(1.0 / time), a->mode == RENDER_DRAW_MODE_POINTS ? "P" : "T", fog_mode,
             a->scene->camera->position.x, a->scene->camera->position.y, a->scene->camera->position.z);
 
         if ((result = app_render_text(a, 2, 0, message)) != LSRERR_OK) {
