@@ -63,8 +63,11 @@ static int render_get_fog_factor(const render* r, f32 depth, f32* factor);
 
 static int render_points(render* r, const f32m4* wvp,
     const vertex* vertexes, const int* indexes, size_t index_count);
+static int render_lines(render* r, const f32m4* wvp,
+    const vertex* vertexes, const int* indexes, size_t index_count);
 static int render_triangles(render* r, const f32m4* wvp,
     const vertex* vertexes, const int* indexes, size_t index_count);
+static int render_rasterize_line(render* r, const rv* vertexes);
 static int render_rasterize_triangle(render* r, const rv* vertexes);
 
 static int render_allocate(render** outObj) {
@@ -111,7 +114,7 @@ int render_create(render** outObj) {
     r->settings.clipping = RENDER_CLIPPING_ENABLED;
     r->settings.culling = RENDER_CULLING_CCW;
     r->settings.depth = RENDER_DEPTH_BUFFER_Z;
-    r->settings.fill = RENDER_FILL_POINT;// RENDER_FILL_SOLID;
+    r->settings.fill = RENDER_FILL_SOLID;
     r->settings.mode = RENDER_DRAW_MODE_TRIANGLES;
 
     r->settings.fog.color.a = 1.0f;
@@ -417,6 +420,9 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
             case RENDER_DRAW_MODE_POINTS: {
                 return render_points(r, &wvp, vertexes, indexes, index_count);
             } break;
+            case RENDER_DRAW_MODE_LINES: {
+                return render_lines(r, &wvp, vertexes, indexes, index_count);
+            }
             case RENDER_DRAW_MODE_TRIANGLES: {
                 return render_triangles(r, &wvp, vertexes, indexes, index_count);
             } break;
@@ -988,6 +994,332 @@ int render_rasterize_triangle(render* r, const rv* vertexes) {
                                 return result;
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+int clip_line_against_plane(rv* v0, rv* v1, frustrum_plane plane) {
+    // Using your original distance function
+    f32 d0 = frustrum_get_plane_distance(v0, plane);
+    f32 d1 = frustrum_get_plane_distance(v1, plane);
+
+    // Both points are strictly outside the plane -> Trivial Rejection
+    if (d0 < 0.0f && d1 < 0.0f) return 0;
+
+    // Both points are inside the plane -> Entirely saved, no clipping needed
+    if (d0 >= 0.0f && d1 >= 0.0f) return 1;
+
+    // One point is inside, one is outside. Calculate the interpolation factor 't'.
+    // Because the signs are flipped, the ratio formula changes slightly to handle 
+    // the span correctly without resulting in a negative 't'.
+    f32 t = d0 / (d0 - d1);
+
+    // Create an interpolated intersection vertex
+    rv intersected;
+    intersected.position.x = v0->position.x + t * (v1->position.x - v0->position.x);
+    intersected.position.y = v0->position.y + t * (v1->position.y - v0->position.y);
+    intersected.position.z = v0->position.z + t * (v1->position.z - v0->position.z);
+    intersected.position.w = v0->position.w + t * (v1->position.w - v0->position.w);
+
+    intersected.uv.x = v0->uv.x + t * (v1->uv.x - v0->uv.x);
+    intersected.uv.y = v0->uv.y + t * (v1->uv.y - v0->uv.y);
+
+    intersected.normal.x = v0->normal.x + t * (v1->normal.x - v0->normal.x);
+    intersected.normal.y = v0->normal.y + t * (v1->normal.y - v0->normal.y);
+    intersected.normal.z = v0->normal.z + t * (v1->normal.z - v0->normal.z);
+
+    intersected.color.r = v0->color.r + t * (v1->color.r - v0->color.r);
+    intersected.color.g = v0->color.g + t * (v1->color.g - v0->color.g);
+    intersected.color.b = v0->color.b + t * (v1->color.b - v0->color.b);
+    intersected.color.a = v0->color.a + t * (v1->color.a - v0->color.a);
+
+    // Replace the endpoint that was outside (negative distance) with our intersection point
+    if (d0 < 0.0f) {
+        *v0 = intersected; // v0 was outside, clip it
+    }
+    else {
+        *v1 = intersected; // v1 was outside, clip it
+    }
+
+    return 1;
+}
+
+int render_lines(render* r, const f32m4* wvp,
+    const vertex* vertexes, const int* indexes, size_t index_count) {
+    if (r == NULL || vertexes == NULL || indexes == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    // Lines must be passed as pairs of vertex indices
+    if (index_count > RENDER_MAX_VERTEX_COUNT || (index_count % 2) != 0) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    int result = LSRERR_OK;
+
+    // Loop over every line primitive in the index buffer (step by 2)
+    for (size_t i = 0; i < index_count; i += 2) {
+        rv line[2];
+
+        // 1. Transform Vertices from World into Homogeneous Clip Space via WVP matrix
+        for (int v = 0; v < 2; v++) {
+            const vertex* src = &vertexes[indexes[i + v]];
+
+            f32x4 pos;
+            pos.x = src->position.x;
+            pos.y = src->position.y;
+            pos.z = src->position.z;
+            pos.w = 1.0f;
+
+            if ((result = f32x4_multiply_f32m4(&pos, wvp, &line[v].position)) != LSRERR_OK) {
+                return result;
+            }
+
+            line[v].normal = src->normal;
+            line[v].uv = src->uv;
+
+            if ((result = f32x4_set_color(&line[v].color, src->color)) != LSRERR_OK) {
+                return result;
+            }
+        }
+
+        // Trivial rejection optimization: If both endpoints are out of any single plane, skip!
+        int skip_line = 0;
+        for (int p = 0; p < FRUSTRUM_PLANE_COUNT; p++) {
+            if (frustrum_is_outside_plane(&line[0], p) &&
+                frustrum_is_outside_plane(&line[1], p)) {
+                skip_line = 1;
+                break;
+            }
+        }
+        if (skip_line) continue;
+
+        if (r->settings.clipping == RENDER_CLIPPING_ENABLED) {
+            rv clipped_line[2];
+            clipped_line[0] = line[0];
+            clipped_line[1] = line[1];
+
+            int line_survived = 1;
+
+            // Sequentially clip the line segment against all 6 frustum planes
+            // Note: This assumes you have or will implement a clean line-plane clipping helper.
+            for (int p = 0; p < FRUSTRUM_PLANE_COUNT; p++) {
+                // clip_line_against_plane takes an input line segment, computes intersections, 
+                // and updates clipped_line in-place. Returns 0 if segment falls completely outside.
+                if (!clip_line_against_plane(&clipped_line[0], &clipped_line[1], p)) {
+                    line_survived = 0;
+                    break;
+                }
+            }
+
+            if (!line_survived) continue;
+
+            // Perspective Divide for the surviving clipped segment
+            rv perspective_line[2];
+            for (int v = 0; v < 2; v++) {
+                perspective_line[v] = clipped_line[v];
+                perspective_line[v].position.x /= clipped_line[v].position.w;
+                perspective_line[v].position.y /= clipped_line[v].position.w;
+                perspective_line[v].position.z /= clipped_line[v].position.w;
+            }
+
+            // Rasterize the individual clipped line segment
+            render_rasterize_line(r, perspective_line);
+        }
+        else {
+            // If clipping is explicitly turned off, rasterize directly after perspective divide
+            rv perspective_line[2];
+            for (int v = 0; v < 2; v++) {
+                perspective_line[v] = line[v];
+                perspective_line[v].position.x /= line[v].position.w;
+                perspective_line[v].position.y /= line[v].position.w;
+                perspective_line[v].position.z /= line[v].position.w;
+            }
+
+            render_rasterize_line(r, perspective_line);
+        }
+    }
+
+    return LSRERR_OK;
+}
+
+int render_rasterize_line(render* r, const rv* vertexes) {
+    if (r == NULL || vertexes == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    texture* s = r->surface;
+    const int width = s->width - 1;
+    const int height = s->height - 1;
+
+    const rv* v0 = &vertexes[0];
+    const rv* v1 = &vertexes[1];
+
+    // Map vertices to target (screen) coordinates
+    const f32 x0_f = ((f32)width * ((v0->position.x + 1.0f) / 2.0f));
+    const f32 y0_f = ((f32)height * ((1.0f - v0->position.y) / 2.0f));
+    const f32 x1_f = ((f32)width * ((v1->position.x + 1.0f) / 2.0f));
+    const f32 y1_f = ((f32)height * ((1.0f - v1->position.y) / 2.0f));
+
+    // Convert endpoints to exact integer pixel coordinates
+    const int x0 = (int)floorf(x0_f + 0.5f);
+    const int y0 = (int)floorf(y0_f + 0.5f);
+    const int x1 = (int)floorf(x1_f + 0.5f);
+    const int y1 = (int)floorf(y1_f + 0.5f);
+
+    // Calculate absolute delta steps
+    const int dx = abs(x1 - x0);
+    const int dy = abs(y1 - y0);
+
+    // Special Point Render Strategy Handle
+    if (r->settings.fill == RENDER_FILL_POINT) {
+        // Direct3D point rendering treats standalone lines as just their raw endpoints
+        int points[2][2] = { {x0, y0}, {x1, y1} };
+        int result = LSRERR_OK;
+        for (int i = 0; i < 2; i++) {
+            int px = points[i][0];
+            int py = points[i][1];
+            if (px >= 0 && px <= width && py >= 0 && py <= height) {
+                // If you need your full shader pipeline execution for points, it would be initialized here.
+                // For raw vertex plotting matching typical legacy fallback layouts:
+                u32 final_color = 0;
+                if ((result = f32x4_get_color((i == 0 ? &v0->color : &v1->color), &final_color)) == LSRERR_OK) {
+                    texture_set_point_color(r->surface, px, py, final_color);
+                }
+            }
+        }
+        return LSRERR_OK;
+    }
+
+    // Determine the total step count based on the dominant major axis
+    const int steps = (dx > dy) ? dx : dy;
+    if (steps == 0) {
+        // Line coordinates occupy the exact same discrete pixel
+        return LSRERR_OK;
+    }
+
+    // Perspective-Correct Interpolation Setup
+    const f32 w0_inv = 1.0f / v0->position.w;
+    const f32 w1_inv = 1.0f / v1->position.w;
+
+    // Attribute Pre-division by W
+    const f32x4 w0_color = { v0->color.a * w0_inv, v0->color.r * w0_inv, v0->color.g * w0_inv, v0->color.b * w0_inv };
+    const f32x4 w1_color = { v1->color.a * w1_inv, v1->color.r * w1_inv, v1->color.g * w1_inv, v1->color.b * w1_inv };
+    const f32 u0_w = v0->uv.x * w0_inv, v0_w = v0->uv.y * w0_inv;
+    const f32 u1_w = v1->uv.x * w1_inv, v1_w = v1->uv.y * w1_inv;
+
+    int result = LSRERR_OK;
+    const texture* c = r->current;
+
+    // Direct Digital Differential Analyzer (DDA) 1D Step Traversal
+    for (int i = 0; i <= steps; i++) {
+        // Compute current linear interpolation fraction factor 't' along the sequence
+        const f32 t = (f32)i / (f32)steps;
+
+        // Linearly interpolate discrete pixel coordinates matching your precision rules
+        const int x = (int)floorf(x0_f + t * (x1_f - x0_f) + 0.5f);
+        const int y = (int)floorf(y0_f + t * (y1_f - y0_f) + 0.5f);
+
+        // Hardware Scissor Guard / Bounds Clip Check
+        if (x < 0 || x > width || y < 0 || y > height) {
+            continue;
+        }
+
+        // Interpolate 1/W for perspective attributes
+        const f32 interpolated_inv_w = w0_inv + t * (w1_inv - w0_inv);
+        const f32 current_w = 1.0f / interpolated_inv_w;
+        const f32 current_z = (v0->position.z + t * (v1->position.z - v0->position.z));
+
+        int draw = TRUE;
+        f32 interpolated_depth = INFINITY;
+
+        // Depth interpolation & depth check
+        if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
+            f32 depth = INFINITY;
+            if ((result = texture_get_point_depth(r->depth, x, y, &depth)) != LSRERR_OK) {
+                return result;
+            }
+
+            interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z ? current_z : current_w;
+
+            // Standard legacy line depth testing offset bias to limit fighting artifacts
+            draw = (interpolated_depth - 1e-4f) < depth;
+        }
+
+        if (draw) {
+            // Perspective correct attribute interpolation
+            f32x4 color;
+            color.a = (w0_color.a + t * (w1_color.a - w0_color.a)) * current_w;
+            color.r = (w0_color.r + t * (w1_color.r - w0_color.r)) * current_w;
+            color.g = (w0_color.g + t * (w1_color.g - w0_color.g)) * current_w;
+            color.b = (w0_color.b + t * (w1_color.b - w0_color.b)) * current_w;
+
+            // Sample texture to get pixel color
+            if (c != NULL) {
+                const f32 u = (u0_w + t * (u1_w - u0_w)) * current_w;
+                const f32 v = (v0_w + t * (v1_w - v0_w)) * current_w;
+
+                const int xc = (int)((f32)(c->width - 1) * u);
+                const int yc = (int)((f32)(c->height - 1) * v);
+
+                u32 sample_color = 0;
+                if ((result = texture_get_point_color(c, xc, yc, &sample_color)) != LSRERR_OK) {
+                    return result;
+                }
+
+                f32x4 texture_color;
+                if ((result = f32x4_set_color(&texture_color, sample_color)) != LSRERR_OK) {
+                    return result;
+                }
+
+                color.a *= texture_color.a;
+                color.r *= texture_color.r;
+                color.g *= texture_color.g;
+                color.b *= texture_color.b;
+            }
+
+            if (r->settings.fog.mode != RENDER_FOG_NONE) {
+                f32 factor = 0.0f;
+                if ((result = render_get_fog_factor(r, current_z, &factor)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if ((result = f32x4_interpolate(&color, &r->settings.fog.color, factor)) != LSRERR_OK) {
+                    return result;
+                }
+            }
+
+            if ((result == LSRERR_OK) && r->settings.blending == RENDER_BLENDING_ENABLED) {
+                u32 sample_color = 0;
+                if ((result = texture_get_point_color(r->surface, x, y, &sample_color)) != LSRERR_OK) {
+                    return result;
+                }
+
+                f32x4 texture_color;
+                if ((result = f32x4_set_color(&texture_color, sample_color)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if ((result = f32x4_blend_color(&color, &texture_color, &color)) != LSRERR_OK) {
+                    return result;
+                }
+            }
+
+            u32 final_color = 0;
+            if ((result == LSRERR_OK) && (result = f32x4_get_color(&color, &final_color)) != LSRERR_OK) {
+                return result;
+            }
+
+            // Draw pixel and update depth buffer
+            if ((result = texture_set_point_color(r->surface, x, y, final_color)) == LSRERR_OK) {
+                if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
+                    if ((result = texture_set_point_depth(r->depth, x, y, interpolated_depth)) != LSRERR_OK) {
+                        return result;
                     }
                 }
             }

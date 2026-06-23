@@ -488,6 +488,12 @@ int app_render_ui(app* a, f64 time) {
     if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
         char message[128];
 
+        const char* draw_mode = "Points";
+        switch (a->mode) {
+        case RENDER_DRAW_MODE_LINES: { draw_mode = "Lines"; } break;
+        case RENDER_DRAW_MODE_TRIANGLES: { draw_mode = "Triangles"; } break;
+        }
+
         const char* fog_mode = "None";
         switch (a->fog) {
         case RENDER_FOG_LINEAR: { fog_mode = "Linear"; } break;
@@ -504,7 +510,7 @@ int app_render_ui(app* a, f64 time) {
         sprintf(message,
             "FPS: %5d\r\nClip: %s\r\nMode: %s\r\nFill: %s\r\nFog: %s\r\nCamera: %.2f %.2f %.2f",
             (int)(1.0 / time), a->clipping == RENDER_CLIPPING_ENABLED ? "On" : "Off",
-            a->mode == RENDER_DRAW_MODE_POINTS ? "Points" : "Triangles", fill_mode, fog_mode,
+            draw_mode, fill_mode, fog_mode,
             a->scene->camera->position.x, a->scene->camera->position.y, a->scene->camera->position.z);
 
         if ((result = app_render_text(a, 2, 0, message)) != LSRERR_OK) {

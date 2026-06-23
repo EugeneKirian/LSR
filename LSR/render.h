@@ -39,8 +39,9 @@ typedef enum render_fog {
 
 typedef enum render_draw_mode {
     RENDER_DRAW_MODE_POINTS         = 0,
-    RENDER_DRAW_MODE_TRIANGLES      = 1,
-    RENDER_DRAW_MODE_COUNT          = 2,
+    RENDER_DRAW_MODE_LINES          = 1,
+    RENDER_DRAW_MODE_TRIANGLES      = 2,
+    RENDER_DRAW_MODE_COUNT          = 3,
     RENDER_DRAW_MODE_FORCE_DWORD    = 0x7FFFFFFF
 } render_draw_mode;
 
