@@ -1,11 +1,17 @@
 #include "arena.h"
+#include "frustrum.h"
 #include "render.h"
 
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
 
-#define RENDER_MAX_VERTEX_COUNT 65535
+#define EPSILON                         (1e-5f)
+
+#define PRIMITIVE_LINE_VERTEX_COUNT     2
+#define PRIMITIVE_TRIANGLE_VERTEX_COUNT 3
+
+#define RENDER_MAX_VERTEX_COUNT         65535
 
 typedef struct v {
     f32x4 position;
@@ -31,7 +37,7 @@ typedef struct pipeline {
     fragment_shader fragment;
 } pipeline;
 
-#define RENDER_MAX_ARENA_SIZE (4 * RENDER_MAX_VERTEX_COUNT * (sizeof(v) + sizeof(int)))
+#define RENDER_MAX_ARENA_SIZE (6 * RENDER_MAX_VERTEX_COUNT * (sizeof(v) + sizeof(int)))
 
 struct render {
     int active;
@@ -57,24 +63,16 @@ struct render {
     texture* surface, *depth;
 };
 
-typedef enum frustrum_plane {
-    FRUSTRUM_PLANE_LEFT         = 0,
-    FRUSTRUM_PLANE_RIGHT        = 1,
-    FRUSTRUM_PLANE_TOP          = 2,
-    FRUSTRUM_PLANE_BOTTOM       = 3,
-    FRUSTRUM_PLANE_NEAR         = 4,
-    FRUSTRUM_PLANE_FAR          = 5,
-    FRUSTRUM_PLANE_COUNT        = 6,
-    FRUSTRUM_PLANE_FORCE_DWORD  = 0x7FFFFFFF,
-} frustrum_plane;
+static int clip_line_against_plane(v* v1, v* v2, frustrum_plane plane); // TODO
+static int clip_polygon_against_plane(const v* in_vertexes, int in_vertex_count,
+    frustrum_plane plane, v* out_vertexes, int* out_vertex_count);
 
-static int viewport_is_valid(const render_viewport* vp);
+static int vertex_interpolate(v* result, const v* v1, const v* v2, f32 t);
 
-static int clip_polygon_against_plane(const v* in_vertexes, int in_count,
-    frustrum_plane plane, v* out_vertexes);
-
-static int frustrum_is_outside_plane(const f32x4* vertex, frustrum_plane plane);
-static f32 frustrum_get_plane_distance(const v* v, frustrum_plane plane);
+static inline int viewport_is_valid(const render_viewport* vp) {
+    return vp->x != 0 || vp->y != 0
+        || vp->width != 0 || vp->height != 0;
+}
 
 static int render_get_fog_factor(const render* r, f32 depth, f32* factor);
 static int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth, const f32x4* pixel);
@@ -442,14 +440,15 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
     ZeroMemory(&wv, sizeof(f32m4));
     ZeroMemory(&wvp, sizeof(f32m4));
 
+    pipeline steps;
+
     int result = LSRERR_OK;
     if ((result = f32m4_multiply(&r->matrixes[RENDER_MATRIX_WORLD],
         &r->matrixes[RENDER_MATRIX_VIEW], &wv)) == LSRERR_OK) {
         if ((result = f32m4_multiply(&wv,
             &r->matrixes[RENDER_MATRIX_PROJECTION], &wvp)) == LSRERR_OK) {
-            pipeline steps;
+            // Construct the shader pipeline to rasterize various geometry (primitives).
             steps.vertex = vertex_shader_stage;
-
             switch (r->settings.mode) {
             case RENDER_DRAW_MODE_POINTS: {
                 steps.geometry = geometry_shader_point_stage;
@@ -475,6 +474,7 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
             v* vs = NULL;
             int* indx = NULL;
             size_t count = 0;
+            // Execute fixed shader pipeline rasterization.
             if ((result = steps.vertex(r, &wvp,
                 vertexes, indexes, index_count, &vs, &indx, &count)) == LSRERR_OK) {
                 if ((result = steps.geometry(r, vs, indx, count, &vs, &count)) == LSRERR_OK) {
@@ -487,136 +487,138 @@ int render_draw(render* r, const vertex* vertexes, const int* indexes, size_t in
     return result;
 }
 
-int viewport_is_valid(const render_viewport* vp) {
-    return vp->x != 0 || vp->y != 0
-        || vp->width != 0 || vp->height != 0;
-}
-
-int frustrum_is_outside_plane(const f32x4* vertex, frustrum_plane plane) {
-    switch (plane) {
-    case FRUSTRUM_PLANE_LEFT: return (vertex->x < -vertex->w);
-    case FRUSTRUM_PLANE_RIGHT: return (vertex->x > vertex->w);
-    case FRUSTRUM_PLANE_TOP: return (vertex->y > vertex->w);
-    case FRUSTRUM_PLANE_BOTTOM: return (vertex->y < -vertex->w);
-    case FRUSTRUM_PLANE_NEAR: return (vertex->z < 0.0f);
-    case FRUSTRUM_PLANE_FAR: return (vertex->z > vertex->w);
+int vertex_interpolate(v* result, const v* v1, const v* v2, f32 t) {
+    if (result == NULL || v1 == NULL || v2 == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
     }
 
-    return FALSE;
+    result->position.x = v1->position.x + t * (v2->position.x - v1->position.x);
+    result->position.y = v1->position.y + t * (v2->position.y - v1->position.y);
+    result->position.z = v1->position.z + t * (v2->position.z - v1->position.z);
+    result->position.w = v1->position.w + t * (v2->position.w - v1->position.w);
+
+    result->normal.x = v1->normal.x + t * (v2->normal.x - v1->normal.x);
+    result->normal.y = v1->normal.y + t * (v2->normal.y - v1->normal.y);
+    result->normal.z = v1->normal.z + t * (v2->normal.z - v1->normal.z);
+
+    result->uv.x = v1->uv.x + t * (v2->uv.x - v1->uv.x);
+    result->uv.y = v1->uv.y + t * (v2->uv.y - v1->uv.y);
+
+    result->color.a = v1->color.a + t * (v2->color.a - v1->color.a);
+    result->color.r = v1->color.r + t * (v2->color.r - v1->color.r);
+    result->color.g = v1->color.g + t * (v2->color.g - v1->color.g);
+    result->color.b = v1->color.b + t * (v2->color.b - v1->color.b);
+
+    return LSRERR_OK;;
 }
 
-f32 frustrum_get_plane_distance(const v* v, frustrum_plane plane) { // TODO
-    switch (plane) {
-    case FRUSTRUM_PLANE_LEFT: return v->position.w + v->position.x;
-    case FRUSTRUM_PLANE_RIGHT: return v->position.w - v->position.x;
-    case FRUSTRUM_PLANE_TOP: return v->position.w - v->position.y;
-    case FRUSTRUM_PLANE_BOTTOM: return v->position.w + v->position.y;
-    case FRUSTRUM_PLANE_NEAR: return v->position.z;
-    case FRUSTRUM_PLANE_FAR: return v->position.w - v->position.z;
+int clip_polygon_against_plane(const v* in_vertexes,
+    int in_vertex_count, frustrum_plane plane, v* out_vertexes, int* out_vertex_count) {
+    if (in_vertexes == NULL || out_vertexes == NULL || out_vertex_count == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
     }
 
-    return 0.0f;
-}
+    if (in_vertex_count < PRIMITIVE_TRIANGLE_VERTEX_COUNT) {
+        *out_vertex_count = 0;
+        return LSRERR_OK;
+    }
 
-// Linearly interpolates all standard attributes between two vertexes at time t
-static v v_lerp(const v* v1, const v* v2, f32 t) { // TODO
-    v out;
-    out.position.x = v1->position.x + t * (v2->position.x - v1->position.x);
-    out.position.y = v1->position.y + t * (v2->position.y - v1->position.y);
-    out.position.z = v1->position.z + t * (v2->position.z - v1->position.z);
-    out.position.w = v1->position.w + t * (v2->position.w - v1->position.w);
+    int count = 0;
+    int result = LSRERR_OK;
+    const v* s = &in_vertexes[in_vertex_count - 1]; // Start with the last vertex
 
-    out.normal.x = v1->normal.x + t * (v2->normal.x - v1->normal.x);
-    out.normal.y = v1->normal.y + t * (v2->normal.y - v1->normal.y);
-    out.normal.z = v1->normal.z + t * (v2->normal.z - v1->normal.z);
-
-    out.uv.x = v1->uv.x + t * (v2->uv.x - v1->uv.x);
-    out.uv.y = v1->uv.y + t * (v2->uv.y - v1->uv.y);
-
-    out.color.a = v1->color.a + t * (v2->color.a - v1->color.a);
-    out.color.r = v1->color.r + t * (v2->color.r - v1->color.r);
-    out.color.g = v1->color.g + t * (v2->color.g - v1->color.g);
-    out.color.b = v1->color.b + t * (v2->color.b - v1->color.b);
-
-    return out;
-}
-
-static int clip_polygon_against_plane(const v* in_vertexes,
-    int in_count, frustrum_plane plane, v* out_vertexes) { // TODO
-    if (in_count < 3) return 0;
-
-    int out_count = 0;
-    const v* s = &in_vertexes[in_count - 1]; // Start with the last vertex
-
-    for (int i = 0; i < in_count; i++) {
+    for (int i = 0; i < in_vertex_count; i++) {
         const v* p = &in_vertexes[i];
 
-        const int s_outside = frustrum_is_outside_plane(&s->position, plane);
-        const int p_outside = frustrum_is_outside_plane(&p->position, plane);
+        int s_outside = FALSE, p_outside = FALSE;
+        if ((result = frustrum_is_outside_plane(&s->position, plane, &s_outside)) != LSRERR_OK) {
+            return result;
+        }
+
+        if ((result = frustrum_is_outside_plane(&p->position, plane, &p_outside)) != LSRERR_OK) {
+            return result;
+        }
 
         if (p_outside) {
             if (!s_outside) {
-                // Case 1: Going Inside -> Outside (Output intersection point)
-                f32 d1 = frustrum_get_plane_distance(s, plane);
-                f32 d2 = frustrum_get_plane_distance(p, plane);
-                f32 t = d1 / (d1 - d2);
-                out_vertexes[out_count++] = v_lerp(s, p, t);
+                // Case 1: Going Inside -> Outside (output intersection point)
+                f32 d1 = 0.0f, d2 = 0.0f;
+                if ((result = frustrum_get_plane_distance(&s->position, plane, &d1)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if ((result = frustrum_get_plane_distance(&p->position, plane, &d2)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if ((result = vertex_interpolate(&out_vertexes[count++], s, p, d1 / (d1 - d2))) != LSRERR_OK) {
+                    return result;
+                }
             }
-            // Case 2: Both Outside (Output nothing)
+            // Case 2: Both Outside (output nothing)
         }
         else {
             if (s_outside) {
-                // Case 3: Going Outside -> Inside (Output intersection + current point)
-                f32 d1 = frustrum_get_plane_distance(s, plane);
-                f32 d2 = frustrum_get_plane_distance(p, plane);
-                f32 t = d1 / (d1 - d2);
-                out_vertexes[out_count++] = v_lerp(s, p, t);
+                // Case 3: Going Outside -> Inside (output intersection + current point)
+                f32 d1 = 0.0f, d2 = 0.0f;
+                if ((result = frustrum_get_plane_distance(&s->position, plane, &d1)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if ((result = frustrum_get_plane_distance(&p->position, plane, &d2)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if ((result = vertex_interpolate(&out_vertexes[count++], s, p, d1 / (d1 - d2))) != LSRERR_OK) {
+                    return result;
+                }
             }
-            // Case 4: Both Inside (Output current point)
-            out_vertexes[out_count++] = p[0];
+
+            // Case 4: Both Inside (output current point)
+            CopyMemory(&out_vertexes[count++], &p[0], sizeof(v));
         }
+
         s = p; // Move to next edge
     }
 
-    return out_count;
+    *out_vertex_count = count;
+
+    return result;
 }
 
-int clip_line_against_plane(v* v0, v* v1, frustrum_plane plane) {
-    // Using your original distance function
-    f32 d0 = frustrum_get_plane_distance(v0, plane);
-    f32 d1 = frustrum_get_plane_distance(v1, plane);
+int clip_line_against_plane(v* v0, v* v1, frustrum_plane plane) { // TODO API standardization
+
+    int result = LSRERR_OK;
+
+    f32 d0 = 0.0f, d1 = 0.0f; // TODO Loop
+    if ((result = frustrum_get_plane_distance(&v0->position, plane, &d0)) != LSRERR_OK) {
+        return result;
+    }
+
+    if ((result = frustrum_get_plane_distance(&v1->position, plane, &d1)) != LSRERR_OK) {
+        return result;
+    }
 
     // Both points are strictly outside the plane -> Trivial Rejection
-    if (d0 < 0.0f && d1 < 0.0f) return 0;
+    if (d0 < 0.0f && d1 < 0.0f) return FALSE;
 
     // Both points are inside the plane -> Entirely saved, no clipping needed
-    if (d0 >= 0.0f && d1 >= 0.0f) return 1;
+    if (d0 >= 0.0f && d1 >= 0.0f) return TRUE;
 
     // One point is inside, one is outside. Calculate the interpolation factor 't'.
     // Because the signs are flipped, the ratio formula changes slightly to handle 
     // the span correctly without resulting in a negative 't'.
-    f32 t = d0 / (d0 - d1);
+    const f32 t = d0 / (d0 - d1);
 
     // Create an interpolated intersection vertex
     v intersected;
-    intersected.position.x = v0->position.x + t * (v1->position.x - v0->position.x);
-    intersected.position.y = v0->position.y + t * (v1->position.y - v0->position.y);
-    intersected.position.z = v0->position.z + t * (v1->position.z - v0->position.z);
-    intersected.position.w = v0->position.w + t * (v1->position.w - v0->position.w);
+    ZeroMemory(&intersected, sizeof(v));
 
-    intersected.uv.x = v0->uv.x + t * (v1->uv.x - v0->uv.x);
-    intersected.uv.y = v0->uv.y + t * (v1->uv.y - v0->uv.y);
+    if ((result = vertex_interpolate(&intersected, v0, v1, t)) != LSRERR_OK) {
+        return result;
+    }
 
-    intersected.normal.x = v0->normal.x + t * (v1->normal.x - v0->normal.x);
-    intersected.normal.y = v0->normal.y + t * (v1->normal.y - v0->normal.y);
-    intersected.normal.z = v0->normal.z + t * (v1->normal.z - v0->normal.z);
-
-    intersected.color.r = v0->color.r + t * (v1->color.r - v0->color.r);
-    intersected.color.g = v0->color.g + t * (v1->color.g - v0->color.g);
-    intersected.color.b = v0->color.b + t * (v1->color.b - v0->color.b);
-    intersected.color.a = v0->color.a + t * (v1->color.a - v0->color.a);
-
-    // Replace the endpoint that was outside (negative distance) with our intersection point
+    // Replace the endpoint that was outside (negative distance) with intersection point
     if (d0 < 0.0f) {
         *v0 = intersected; // v0 was outside, clip it
     }
@@ -624,7 +626,7 @@ int clip_line_against_plane(v* v0, v* v1, frustrum_plane plane) {
         *v1 = intersected; // v1 was outside, clip it
     }
 
-    return 1;
+    return TRUE;
 }
 
 int render_get_fog_factor(const render* r, f32 depth, f32* factor) {
@@ -636,7 +638,7 @@ int render_get_fog_factor(const render* r, f32 depth, f32* factor) {
     case RENDER_FOG_LINEAR: {
         const f32 distance = r->settings.fog.end - r->settings.fog.start;
 
-        if (r->settings.fog.end <= 0.0f || fabsf(distance) < 1e-5f) {
+        if (r->settings.fog.end <= 0.0f || fabsf(distance) < EPSILON) {
             *factor = 0.0f;
             return LSRERR_OK;
         }
@@ -736,28 +738,26 @@ int geometry_shader_point_stage(render* r,
     for (size_t i = 0; i < in_index_count; i++) {
         const v* in = &in_vertexes[in_indexes[i]];
 
-        // Perfrom vertex clipping in clip space.
         int discard = FALSE;
         if (r->settings.clipping == RENDER_CLIPPING_ENABLED) {
             for (frustrum_plane plane = 0; plane < FRUSTRUM_PLANE_COUNT; plane++) {
-                if (frustrum_is_outside_plane(&in->position, plane)) {
-                    discard = TRUE; break;
+                if ((result = frustrum_is_outside_plane(&in->position, plane, &discard)) != LSRERR_OK) {
+                    return result;
+                }
+
+                if (discard) {
+                    break;
                 }
             }
         }
 
         if (!discard) {
             v* vertex = &vertexes[count++];
+            CopyMemory(vertex, in, sizeof(v));
 
-            // Convert vertex coordinates from clip to NDC space (perspective divide).
-            vertex->position.x = in->position.x / in->position.w;
-            vertex->position.y = in->position.y / in->position.w;
-            vertex->position.z = in->position.z / in->position.w;
-            vertex->position.w = in->position.w;
-
-            CopyMemory(&vertex->normal, &in->normal, sizeof(f32x3));
-            CopyMemory(&vertex->color, &in->color, sizeof(f32x4));
-            CopyMemory(&vertex->uv, &in->uv, sizeof(f32x2));
+            if ((result = f32x4_perspective_divide(&vertex->position)) != LSRERR_OK) {
+                return result;
+            }
         }
     }
 
@@ -906,7 +906,7 @@ int geometry_shader_line_stage(render* r,
     }
 
     if (in_index_count > RENDER_MAX_VERTEX_COUNT
-        || (in_index_count % 2) != 0) {
+        || (in_index_count % PRIMITIVE_LINE_VERTEX_COUNT) != 0) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
@@ -915,22 +915,32 @@ int geometry_shader_line_stage(render* r,
         return LSRERR_OUT_OF_MEMORY;
     }
 
+    int result = LSRERR_OK;
     size_t count = 0;
-    v line[2 /* TODO */];
+    v line[PRIMITIVE_LINE_VERTEX_COUNT];
 
-    for (size_t i = 0; i < in_index_count; i += 2 /* TODO*/) {
-        // TODO loop
-        CopyMemory(&line[0], &in_vertexes[in_indexes[i + 0]], sizeof(v));
-        CopyMemory(&line[1], &in_vertexes[in_indexes[i + 1]], sizeof(v));
+    for (size_t i = 0; i < in_index_count; i += PRIMITIVE_LINE_VERTEX_COUNT) {
+        for (size_t x = 0; x < PRIMITIVE_LINE_VERTEX_COUNT; x++) {
+            CopyMemory(&line[x], &in_vertexes[in_indexes[i + x]], sizeof(v));
+        }
 
         int discard = FALSE;
 
         // Trivial rejection optimization:
         // Skip the line if both endpoints are out of any single plane.
         for (frustrum_plane plane = 0; plane < FRUSTRUM_PLANE_COUNT; plane++) {
-            if (frustrum_is_outside_plane(&line[0].position, plane)
-                && frustrum_is_outside_plane(&line[1].position, plane)) {
-                discard = TRUE; break;
+            int all = TRUE, outside = FALSE;
+            for (size_t x = 0; x < PRIMITIVE_LINE_VERTEX_COUNT; x++) {
+                if ((result = frustrum_is_outside_plane(&line[x].position, plane, &outside)) != LSRERR_OK) {
+                    return result;
+                }
+
+                all = all && outside;
+            }
+
+            if (all) {
+                discard = TRUE;
+                break;
             }
         }
 
@@ -946,18 +956,13 @@ int geometry_shader_line_stage(render* r,
             }
 
             if (!discard) {
-                for (int x = 0; x < 2 /* TODO */; x++) {
+                for (int x = 0; x < PRIMITIVE_LINE_VERTEX_COUNT; x++) {
                     v* vertex = &vertexes[count++];
+                    CopyMemory(vertex, &line[x], sizeof(v));
 
-                    // Convert vertex coordinates from clip to NDC space (perspective divide).
-                    vertex->position.x = line[x].position.x / line[x].position.w;
-                    vertex->position.y = line[x].position.y / line[x].position.w;
-                    vertex->position.z = line[x].position.z / line[x].position.w;
-                    vertex->position.w = line[x].position.w;
-
-                    CopyMemory(&vertex->normal, &line[x].normal, sizeof(f32x3));
-                    CopyMemory(&vertex->color, &line[x].color, sizeof(f32x4));
-                    CopyMemory(&vertex->uv, &line[x].uv, sizeof(f32x2));
+                    if ((result = f32x4_perspective_divide(&vertex->position)) != LSRERR_OK) {
+                        return result;
+                    }
                 }
             }
         }
@@ -966,7 +971,7 @@ int geometry_shader_line_stage(render* r,
     *out_vertexes = vertexes;
     *out_vertex_count = count;
 
-    return LSRERR_OK;
+    return result;
 }
 
 int fragment_shader_line_stage(render* r,
@@ -981,7 +986,7 @@ int fragment_shader_line_stage(render* r,
 
     int result = LSRERR_OK;
 
-    for (size_t k = 0; k < in_vertex_count; k += 2) {
+    for (size_t k = 0; k < in_vertex_count; k += PRIMITIVE_LINE_VERTEX_COUNT) {
         const v* v0 = &in_vertexes[k + 0];
         const v* v1 = &in_vertexes[k + 1];
 
@@ -1091,7 +1096,7 @@ int geometry_shader_triangle_stage(render* r,
     }
 
     if (in_index_count > RENDER_MAX_VERTEX_COUNT
-        || (in_index_count % 3) != 0) {
+        || (in_index_count % PRIMITIVE_TRIANGLE_VERTEX_COUNT) != 0) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
@@ -1100,24 +1105,32 @@ int geometry_shader_triangle_stage(render* r,
         return LSRERR_OUT_OF_MEMORY;
     }
 
+    int result = LSRERR_OK;
     size_t count = 0;
-    v triangle[3 /* TODO */];
+    v triangle[PRIMITIVE_TRIANGLE_VERTEX_COUNT];
 
-    for (size_t i = 0; i < in_index_count; i += 3 /* TODO*/) {
-        // TODO loop
-        CopyMemory(&triangle[0], &in_vertexes[in_indexes[i + 0]], sizeof(v));
-        CopyMemory(&triangle[1], &in_vertexes[in_indexes[i + 1]], sizeof(v));
-        CopyMemory(&triangle[2], &in_vertexes[in_indexes[i + 2]], sizeof(v));
+    for (size_t i = 0; i < in_index_count; i += PRIMITIVE_TRIANGLE_VERTEX_COUNT) {
+        for (size_t x = 0; x < PRIMITIVE_TRIANGLE_VERTEX_COUNT; x++) {
+            CopyMemory(&triangle[x], &in_vertexes[in_indexes[i + x]], sizeof(v));
+        }
 
         int discard = FALSE;
 
         // Trivial rejection optimization:
         // Skip the triangle if all 3 vertexes are out of any single plane.
         for (frustrum_plane plane = 0; plane < FRUSTRUM_PLANE_COUNT; plane++) {
-            if (frustrum_is_outside_plane(&triangle[0].position, plane)
-                && frustrum_is_outside_plane(&triangle[1].position, plane)
-                && frustrum_is_outside_plane(&triangle[2].position, plane)) {
-                discard = TRUE; break;
+            int all = TRUE, outside = FALSE;
+            for (size_t x = 0; x < PRIMITIVE_TRIANGLE_VERTEX_COUNT; x++) {
+                if ((result = frustrum_is_outside_plane(&triangle[x].position, plane, &outside)) != LSRERR_OK) {
+                    return result;
+                }
+
+                all = all && outside;
+            }
+
+            if (all) {
+                discard = TRUE;
+                break;
             }
         }
 
@@ -1129,47 +1142,51 @@ int geometry_shader_triangle_stage(render* r,
                 v buffer_b[12];
 
                 // Initialize input buffer with original triangle vertexes
-                CopyMemory(buffer_a, triangle, 3 /* TODO */ * sizeof(v));
-                int current_vertex_count = 3;
+                CopyMemory(buffer_a, triangle, PRIMITIVE_TRIANGLE_VERTEX_COUNT * sizeof(v));
+                int current_vertex_count = PRIMITIVE_TRIANGLE_VERTEX_COUNT;
 
                 // Sequentially clip against all 6 frustum planes
                 for (frustrum_plane plane = 0; plane < FRUSTRUM_PLANE_COUNT; plane++) {
                     if (plane % 2 == 0) {
-                        current_vertex_count =
-                            clip_polygon_against_plane(buffer_a, current_vertex_count, plane, buffer_b);
+                        if ((result = clip_polygon_against_plane(buffer_a,
+                            current_vertex_count, plane, buffer_b, &current_vertex_count)) != LSRERR_OK) {
+                            return result;
+                        }
                     }
                     else {
-                        current_vertex_count =
-                            clip_polygon_against_plane(buffer_b, current_vertex_count, plane, buffer_a);
+                        if ((result = clip_polygon_against_plane(buffer_b,
+                            current_vertex_count, plane, buffer_a, &current_vertex_count)) != LSRERR_OK) {
+                            return result;
+                        }
                     }
 
-                    if (current_vertex_count < 3) {
-                        // Primitive is completely wiped out
+                    // Check if the primitive is completely wiped out
+                    if (current_vertex_count < PRIMITIVE_TRIANGLE_VERTEX_COUNT) {
                         break;
                     }
                 }
 
                 // Target buffer depends on whether plane loop ended on odd/even step
-                const v* final_polygon = (FRUSTRUM_PLANE_COUNT % 2 == 0) ? buffer_a : buffer_b;
+                const v* final_polygon =
+                    (FRUSTRUM_PLANE_COUNT % PRIMITIVE_LINE_VERTEX_COUNT == 0) ? buffer_a : buffer_b;
 
                 // Triangulate resulting convex polygon using a clean Triangle Fan arrangement
                 for (int vert = 1; vert < current_vertex_count - 1; vert++) {
-                    v split_triangle[3]; // TODO
+                    v split_triangle[PRIMITIVE_TRIANGLE_VERTEX_COUNT];
                     split_triangle[0] = final_polygon[0];
                     split_triangle[1] = final_polygon[vert];
                     split_triangle[2] = final_polygon[vert + 1];
 
-                    // Perspective Divide (w component must be non-zero)
-                    for (size_t x = 0; x < 3 /* TODO*/; x++) {
-                        split_triangle[x].position.x /= split_triangle[x].position.w;
-                        split_triangle[x].position.y /= split_triangle[x].position.w;
-                        split_triangle[x].position.z /= split_triangle[x].position.w;
+                    for (size_t x = 0; x < PRIMITIVE_TRIANGLE_VERTEX_COUNT; x++) {
+                        if ((result = f32x4_perspective_divide(&split_triangle[x].position)) != LSRERR_OK) {
+                            return result;
+                        }
                     }
 
                     switch (r->settings.fill) {
                     case RENDER_FILL_POINT:
                     case RENDER_FILL_SOLID: {
-                        for (size_t x = 0; x < 3 /* TODO */; x++) {
+                        for (size_t x = 0; x < PRIMITIVE_TRIANGLE_VERTEX_COUNT; x++) {
                             CopyMemory(&vertexes[count++], &split_triangle[x], sizeof(v));
                         }
 
@@ -1186,17 +1203,16 @@ int geometry_shader_triangle_stage(render* r,
                 }
             }
             else {
-                // Perspective Divide (w component must be non-zero)
-                for (size_t x = 0; x < 3 /* TODO*/; x++) {
-                    triangle[x].position.x /= triangle[x].position.w;
-                    triangle[x].position.y /= triangle[x].position.w;
-                    triangle[x].position.z /= triangle[x].position.w;
+                for (size_t x = 0; x < PRIMITIVE_TRIANGLE_VERTEX_COUNT; x++) {
+                    if ((result = f32x4_perspective_divide(&triangle[x].position)) != LSRERR_OK) {
+                        return result;
+                    }
                 }
 
                 switch (r->settings.fill) {
                 case RENDER_FILL_POINT:
                 case RENDER_FILL_SOLID: {
-                    for (size_t x = 0; x < 3 /* TODO */; x++) {
+                    for (size_t x = 0; x < PRIMITIVE_TRIANGLE_VERTEX_COUNT; x++) {
                         CopyMemory(&vertexes[count++], &triangle[x], sizeof(v));
                     }
 
@@ -1217,7 +1233,7 @@ int geometry_shader_triangle_stage(render* r,
     *out_vertexes = vertexes;
     *out_vertex_count = count;
 
-    return LSRERR_OK;
+    return result;
 }
 
 int fragment_shader_triangle_stage(render* r,
@@ -1232,7 +1248,7 @@ int fragment_shader_triangle_stage(render* r,
 
     int result = LSRERR_OK;
 
-    for (size_t k = 0; k < in_vertex_count; k += 3 /* TODO */) {
+    for (size_t k = 0; k < in_vertex_count; k += PRIMITIVE_TRIANGLE_VERTEX_COUNT) {
         const v* v0 = &in_vertexes[k + 0];
         const v* v1 = &in_vertexes[k + 1];
         const v* v2 = &in_vertexes[k + 2];
@@ -1249,17 +1265,17 @@ int fragment_shader_triangle_stage(render* r,
         const f32 signed_area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
 
         if (r->settings.culling == RENDER_CULLING_NONE) {
-            if (fabsf(signed_area) <= 1e-5f) {
+            if (fabsf(signed_area) <= EPSILON) {
                 continue;
             }
         }
         else if (r->settings.culling == RENDER_CULLING_CCW) {
-            if (signed_area < 1e-5f) {
+            if (signed_area < EPSILON) {
                 continue;
             }
         }
         else if (r->settings.culling == RENDER_CULLING_CW) {
-            if (signed_area > -1e-5f) {
+            if (signed_area > -EPSILON) {
                 continue;
             }
         }
@@ -1347,7 +1363,8 @@ int fragment_shader_triangle_stage(render* r,
                             return result;
                         }
 
-                        interpolated_depth = r->settings.depth == RENDER_DEPTH_BUFFER_Z ? current_z : current_w;
+                        interpolated_depth =
+                            r->settings.depth == RENDER_DEPTH_BUFFER_Z ? current_z : current_w;
 
                         draw = interpolated_depth < depth;
                     }

@@ -29,7 +29,8 @@ struct app {
         POINT           current;
         POINT           previous;
     } mouse;
-    render_clipping     clipping;
+    render_clipping     clip;
+    render_culling      cull;
     render_draw_mode    mode;
     render_fill         fill;
     render_fog          fog;
@@ -81,7 +82,8 @@ int app_create(app** outObj) {
 
     InitializeCriticalSection(&a->lock);
 
-    a->clipping = RENDER_CLIPPING_ENABLED;
+    a->clip = RENDER_CLIPPING_ENABLED;
+    a->cull = RENDER_CULLING_CCW;
     a->fill = RENDER_FILL_SOLID;
     a->fog = RENDER_FOG_LINEAR;
     a->mode = RENDER_DRAW_MODE_TRIANGLES;
@@ -267,7 +269,7 @@ int app_key_down(app* a, int key) {
         a->movement |= DIRECTION_DOWNWARD;
     } break;
     case 'C': {
-        a->clipping = (a->clipping + 1) % RENDER_CLIPPING_COUNT;
+        a->clip = (a->clip + 1) % RENDER_CLIPPING_COUNT;
     } break;
     case 'I': {
         a->fill = (a->fill + 1) % RENDER_FILL_COUNT;
@@ -277,6 +279,9 @@ int app_key_down(app* a, int key) {
     } break;
     case 'M': {
         a->mode = (a->mode + 1) % RENDER_DRAW_MODE_COUNT;
+    } break;
+    case 'X': {
+        a->cull = (a->cull + 1) % RENDER_CULLING_COUNT;
     } break;
     }
 
@@ -384,8 +389,8 @@ int app_render_scene(app* a, f64 time) {
     // 2. Set configuration
     if ((result == LSRERR_OK)
         && (result = render_set_blending(r, RENDER_BLENDING_DISABLED)) == LSRERR_OK) {
-        if ((result = render_set_clipping(r, a->clipping)) == LSRERR_OK) {
-            if ((result = render_set_culling(r, RENDER_CULLING_CCW)) == LSRERR_OK) {
+        if ((result = render_set_clipping(r, a->clip)) == LSRERR_OK) {
+            if ((result = render_set_culling(r, a->cull)) == LSRERR_OK) {
                 if ((result = render_set_fill(r, a->fill)) == LSRERR_OK) {
                     if ((result = render_set_fog(r, a->fog)) == LSRERR_OK) {
                         if ((result = render_set_fog_color(r, 0xFFCCCCCC)) == LSRERR_OK) {
@@ -488,6 +493,12 @@ int app_render_ui(app* a, f64 time) {
     if ((result == LSRERR_OK) && (result = render_start(r)) == LSRERR_OK) {
         char message[128];
 
+        const char* cull_mode = "None";
+        switch (a->cull) {
+        case RENDER_CULLING_CW: { cull_mode = "CW"; } break;
+        case RENDER_CULLING_CCW: { cull_mode = "CCW"; } break;
+        }
+
         const char* draw_mode = "Points";
         switch (a->mode) {
         case RENDER_DRAW_MODE_LINES: { draw_mode = "Lines"; } break;
@@ -508,9 +519,9 @@ int app_render_ui(app* a, f64 time) {
         }
 
         sprintf(message,
-            "FPS: %5d\r\nClip: %s\r\nMode: %s\r\nFill: %s\r\nFog: %s\r\nCamera: %.2f %.2f %.2f",
-            (int)(1.0 / time), a->clipping == RENDER_CLIPPING_ENABLED ? "On" : "Off",
-            draw_mode, fill_mode, fog_mode,
+            "FPS: %5d\r\n(C) Clip: %s\r\n(X) Cull: %s\r\n(M) Mode: %s\r\n(I) Fill: %s\r\n(F) Fog: %s\r\nCamera: %.2f %.2f %.2f",
+            (int)(1.0 / time), a->clip == RENDER_CLIPPING_ENABLED ? "On" : "Off",
+            cull_mode, draw_mode, fill_mode, fog_mode,
             a->scene->camera->position.x, a->scene->camera->position.y, a->scene->camera->position.z);
 
         if ((result = app_render_text(a, 2, 0, message)) != LSRERR_OK) {

@@ -160,6 +160,7 @@
     <ClCompile Include="bmp.c" />
     <ClCompile Include="camera.c" />
     <ClCompile Include="font.c" />
+    <ClCompile Include="frustrum.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="math.c" />
     <ClCompile Include="mesh.c" />
@@ -176,6 +177,7 @@
     <ClInclude Include="camera.h" />
     <ClInclude Include="common.h" />
     <ClInclude Include="font.h" />
+    <ClInclude Include="frustrum.h" />
     <ClInclude Include="mesh.h" />
     <ClInclude Include="render.h" />
     <ClInclude Include="scene.h" />

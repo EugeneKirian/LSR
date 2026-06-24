@@ -16,6 +16,7 @@ struct {
     HWND        hwnd;
     HINSTANCE   instance;
     app*        app;
+    int         active;
     int         exit;
 } state;
 
@@ -46,6 +47,18 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     } break;
+    case WM_ACTIVATE: {
+        state.active = LOWORD(wp) != WA_INACTIVE;
+        return 0;
+    } break;
+    case WM_SETFOCUS: {
+        state.active = TRUE;
+        return 0;
+    } break;
+    case WM_KILLFOCUS: {
+        state.active = FALSE;
+        return 0;
+    } break;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         ZeroMemory(&ps, sizeof(PAINTSTRUCT));
@@ -53,7 +66,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         app_blt_surface(state.app, &ps.rcPaint, hdc, NULL);
         EndPaint(state.hwnd, &ps);
         ReleaseDC(state.hwnd, hdc);
-
         return 0;
     } break;
     case WM_KEYDOWN: {
@@ -94,6 +106,10 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ScreenToClient(hwnd, &point);
         app_mouse_up(state.app, &point,
             msg == WM_LBUTTONUP ? MOUSE_BUTTON_LEFT : MOUSE_BUTTON_RIGHT);
+    } break;
+    case WM_ACTIVATEAPP: {
+        state.active = wp != FALSE;
+        return 0;
     } break;
     }
 
@@ -174,6 +190,10 @@ int main(int argc, char** argv) {
 
         if (state.exit) {
             break;
+        }
+
+        if (!state.active) {
+            continue;
         }
 
         const f64 elapsed = (f64)(start.QuadPart - end.QuadPart) / freq.QuadPart;

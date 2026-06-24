@@ -97,9 +97,10 @@ int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3*
 
 int f32x4_interpolate(f32x4* result, const f32x4* value, f32 t);
 int f32x4_blend_color(f32x4* result, const f32x4* back, const f32x4* front);
-int f32x4_get_color(const f32x4* v, u32* color);
-int f32x4_set_color(f32x4* v, u32 color);
+int f32x4_get_color(const f32x4* value, u32* color);
+int f32x4_set_color(f32x4* value, u32 color);
 int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result);
+int f32x4_perspective_divide(f32x4* value);
 
 int f32m4_identity(f32m4* m);
 int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result);

@@ -54,6 +54,9 @@
     <ClCompile Include="font.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="frustrum.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="arena.h">
@@ -90,6 +93,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="font.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="frustrum.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
