@@ -164,7 +164,7 @@ static int wavefront_load_material(wavefront* wf, const char* content) {
                         }
                     }
 
-                    if (mtl != NULL && mtl->texture != NULL) {
+                    if (mtl != NULL && mtl->texture == NULL) {
                         if (strncmp(ptr, "map_Kd ", 7) == 0) {
                             const size_t l = get_line_length(ptr);
                             char* name = (char*)arena_allocate(wf->arena, l + 1);
@@ -329,40 +329,61 @@ static int wavefront_allocate_object(wavefront* wf, const wfobj_info* info) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    wf->object->libraries = (char**)arena_allocate(wf->arena, sizeof(char*) * info->library_count);
+    const size_t libraries_size = sizeof(char*) * info->library_count;
+    wf->object->libraries = (char**)arena_allocate(wf->arena, libraries_size);
     if (wf->object->libraries == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    wf->object->materials = (wfmtl*)arena_allocate(wf->arena, sizeof(wfmtl) * info->material_count);
+    ZeroMemory(wf->object->libraries, libraries_size);
+
+    const size_t materials_size = sizeof(wfmtl) * info->material_count;
+    wf->object->materials = (wfmtl*)arena_allocate(wf->arena, materials_size);
     if (wf->object->materials == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    wf->object->vertexes = (f32x3*)arena_allocate(wf->arena, sizeof(f32x3) * info->vertex_count);
+    ZeroMemory(wf->object->materials, materials_size);
+
+    const size_t vertexes_size = sizeof(f32x3) * info->vertex_count;
+    wf->object->vertexes = (f32x3*)arena_allocate(wf->arena, vertexes_size);
     if (wf->object->vertexes == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    wf->object->vertex_normals = (f32x3*)arena_allocate(wf->arena, sizeof(f32x3) * info->vertex_normal_count);
+    ZeroMemory(wf->object->vertexes, vertexes_size);
+
+    const size_t vertex_normals_size = sizeof(f32x3) * info->vertex_normal_count;
+    wf->object->vertex_normals = (f32x3*)arena_allocate(wf->arena, vertex_normals_size);
     if (wf->object->vertex_normals == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    wf->object->vertex_uvs = (f32x2*)arena_allocate(wf->arena, sizeof(f32x2) * info->vertex_uv_count);
+    ZeroMemory(wf->object->vertex_normals, vertex_normals_size);
+
+    const size_t vertex_uvs_size = sizeof(f32x2) * info->vertex_uv_count;
+    wf->object->vertex_uvs = (f32x2*)arena_allocate(wf->arena, vertex_uvs_size);
     if (wf->object->vertex_uvs == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    wf->object->groups = (char**)arena_allocate(wf->arena, sizeof(char*) * info->group_count);
+    ZeroMemory(wf->object->vertex_uvs, vertex_uvs_size);
+
+    const size_t groups_size = sizeof(char*) * info->group_count;
+    wf->object->groups = (char**)arena_allocate(wf->arena, groups_size);
     if (wf->object->groups == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
 
-    wf->object->faces = (wfface*)arena_allocate(wf->arena, sizeof(wfface) * info->face_count);
+    ZeroMemory(wf->object->groups, groups_size);
+
+    const size_t faces_size = sizeof(wfface) * info->face_count;
+    wf->object->faces = (wfface*)arena_allocate(wf->arena, faces_size);
     if (wf->object->faces == NULL) {
         return LSRERR_OUT_OF_MEMORY;
     }
+
+    ZeroMemory(wf->object->faces, faces_size);
 
     return LSRERR_OK;
 }
@@ -564,7 +585,7 @@ static int wavefront_parse_object(wavefront* wf, const wfobj_info* info, const c
 
                 switch (c) {
                 case ' ': {
-                    float x = 0.0f, y = 0.0f, z = 0.0f;
+                    f32 x = 0.0f, y = 0.0f, z = 0.0f;
 
                     if (sscanf(ptr, "v %f %f %f", &x, &y, &z) != 3) {
                         wf->error = LSRERR_INVALID_FILE;
@@ -586,7 +607,7 @@ static int wavefront_parse_object(wavefront* wf, const wfobj_info* info, const c
                         return wf->error;
                     }
 
-                    float x = 0.0f, y = 0.0f;
+                    f32 x = 0.0f, y = 0.0f;
 
                     if (sscanf(ptr, "vt %f %f", &x, &y) != 2) {
                         wf->error = LSRERR_INVALID_FILE;
@@ -607,7 +628,7 @@ static int wavefront_parse_object(wavefront* wf, const wfobj_info* info, const c
                         return wf->error;
                     }
 
-                    float x = 0.0f, y = 0.0f, z = 0.0f;
+                    f32 x = 0.0f, y = 0.0f, z = 0.0f;
 
                     if (sscanf(ptr, "vn %f %f %f", &x, &y, &z) != 3) {
                         wf->error = LSRERR_INVALID_FILE;

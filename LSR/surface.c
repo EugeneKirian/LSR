@@ -100,18 +100,18 @@ void surface_release(surface* s) {
     }
 }
 
-int surface_load_texture(surface* s, const texture* t) {
+int surface_load_texture(surface* s, const texture* t, int level) {
     if (s == NULL || t == NULL) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    const int w = s->width < t->width ? s->width : t->width;
-    const int h = s->height < t->height ? s->height : t->height;
+    const int w = s->width < t->levels[level].width ? s->width : t->levels[level].width;
+    const int h = s->height < t->levels[level].height ? s->height : t->levels[level].height;
 
     surface_lock(s);
 
     for (int i = 0; i < h; i++) {
-        const u32* src = (u32*)(t->data + i * t->width * sizeof(u32));
+        const u32* src = (u32*)(t->levels[level].data + i * t->levels[level].width * sizeof(u32));
         u32* dst = (u32*)(s->data + i * s->width * sizeof(u32));
         CopyMemory(dst, src, w * sizeof(u32));
     }

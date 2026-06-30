@@ -20,6 +20,13 @@ typedef enum render_culling {
     RENDER_CULLING_FORCE_DWORD  = 0x7FFFFFFF
 } render_culling;
 
+typedef enum render_dither {
+    RENDER_DITHER_DISABLED      = 0,
+    RENDER_DITHER_ENABLED       = 1,
+    RENDER_DITHER_COUNT         = 2,
+    RENDER_DITHER_FORCE_DWORD   = 0x7FFFFFFF
+} render_dither;
+
 typedef enum render_fill {
     RENDER_FILL_POINT           = 0,
     RENDER_FILL_WIRE            = 1,
@@ -78,6 +85,7 @@ void render_release(render* r);
 
 int render_set_draw_mode(render* r, render_draw_mode mode);
 int render_set_blending(render* r, render_blending blending);
+int render_set_dither(render* r, render_dither dither);
 int render_set_clipping(render* r, render_clipping clipping);
 int render_set_culling(render* r, render_culling culling);
 int render_set_fill(render* r, render_fill fill);
@@ -88,6 +96,7 @@ int render_set_fog_range(render* r, f32 start, f32 end);
 int render_set_texture(render* r, const texture* t);
 int render_set_matrix(render* r, render_matrix type, const f32m4* matrix);
 int render_set_viewport(render* r, const render_viewport* vp);
+int render_set_texture_sampling(render* r, texture_sampling sampling);
 
 int render_set_render_target(render* r, surface* t);
 int render_set_depth_buffer(render* r, render_depth_buffer depth);

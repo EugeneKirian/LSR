@@ -193,6 +193,7 @@ int main(int argc, char** argv) {
         }
 
         if (!state.active) {
+            Sleep(1);
             continue;
         }
 

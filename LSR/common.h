@@ -6,7 +6,7 @@
 #define NOMINMAX
 #include <windows.h>
 
-#define LSRERR_OK                0
+#define LSRERR_OK               0
 #define LSRERR_INVALID_ARGUMENT (-1)
 #define LSRERR_OUT_OF_MEMORY    (-2)
 #define LSRERR_FILE_NOT_FOUND   (-3)
@@ -95,12 +95,13 @@ int f32x3_cross_product(const f32x3* v1, const f32x3* v2, f32x3* cp);
 int f32x3_normalize(const f32x3* v, f32x3* n);
 int f32x3_triangle_normal(const f32x3* a, const f32x3* b, const f32x3* c, f32x3* n);
 
-int f32x4_interpolate(f32x4* result, const f32x4* value, f32 t);
 int f32x4_blend_color(f32x4* result, const f32x4* back, const f32x4* front);
+int f32x4_dither(f32x4* color, int x, int y, f32 depth);
 int f32x4_get_color(const f32x4* value, u32* color);
-int f32x4_set_color(f32x4* value, u32 color);
+int f32x4_interpolate(f32x4* result, const f32x4* value, f32 t);
 int f32x4_multiply_f32m4(const f32x4* v, const f32m4* m, f32x4* result);
 int f32x4_perspective_divide(f32x4* value);
+int f32x4_set_color(f32x4* value, u32 color);
 
 int f32m4_identity(f32m4* m);
 int f32m4_multiply(f32m4* m1, f32m4* m2, f32m4* result);
@@ -114,3 +115,9 @@ inline f32 clampf(f32 value, f32 min, f32 max) {
 int transform_f32m4(const transform* t, f32m4* m);
 
 u32 power_of_two_round_up(u32 value);
+
+inline int noise(int x, int y) {
+    int n = x + y * 57;
+    n = (n << 13) ^ n;
+    return (n * (n * n * 15731 + 789221) + 1376312589) & 0x7FFFFFFF;
+}

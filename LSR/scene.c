@@ -53,7 +53,7 @@ static int scene_allocate_textures(scene* s, size_t count) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    const size_t size = count * sizeof(scene*);
+    const size_t size = count * sizeof(texture*);
     s->assets.textures = (texture*)malloc(size);
     if (s->assets.textures == NULL) {
         return LSRERR_OUT_OF_MEMORY;
@@ -83,9 +83,6 @@ int scene_create(const char* path, scene** outObj) {
     wavefront* wf = NULL;
     if ((result = wavefront_open(complete, &wf)) != LSRERR_OK) {
         if (wf != NULL) {
-            char* message = NULL;
-            wavefront_get_error(wf, &message);
-            printf("Error: %s\n", message);
             wavefront_release(wf);
         }
 
@@ -155,8 +152,8 @@ int scene_create(const char* path, scene** outObj) {
         if (file != NULL) {
             bmp* image = NULL;
             if ((result = bmp_open(file, &image)) == LSRERR_OK) {
-                if ((result = texture_create(name, image->info.biWidth,
-                    image->info.biHeight, &s->assets.textures[s->assets.count])) == LSRERR_OK) {
+                if ((result = texture_create(name, image->info.biWidth, image->info.biHeight,
+                    TEXTURE_TYPE_COMPLEX, &s->assets.textures[s->assets.count])) == LSRERR_OK) {
                     if ((result = texture_load_bitmap(s->assets.textures[s->assets.count], image)) == LSRERR_OK) {
                         s->assets.count++;
                     }

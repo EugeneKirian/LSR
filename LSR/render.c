@@ -44,6 +44,7 @@ struct render {
     arena* arena;
     struct {
         render_blending blending;
+        render_dither dither;
         render_clipping clipping;
         render_culling culling;
         render_fill fill;
@@ -55,6 +56,7 @@ struct render {
         } fog;
         render_draw_mode mode;
         render_depth_buffer depth;
+        texture_sampling sampling;
     } settings;
     f32m4 matrixes[RENDER_MATRIX_COUNT];
     const texture* current;
@@ -75,7 +77,7 @@ static inline int viewport_is_valid(const render_viewport* vp) {
 }
 
 static int render_get_fog_factor(const render* r, f32 depth, f32* factor);
-static int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth, const f32x4* pixel);
+static int rasterize_pixel(render* r, int x, int y, f32 u, f32 v, f32 lod, f32 z, f32 buffer_depth, const f32x4* pixel);
 
 static int vertex_shader_stage(render* r, const f32m4* wvp,
     const vertex* in_vertexes, const int* in_indexes, size_t index_count,
@@ -155,6 +157,8 @@ int render_create(render** outObj) {
     r->settings.fog.start = 1.0f;
     r->settings.fog.end = 100.0f;
 
+    r->settings.sampling = TEXTURE_SAMPLING_NEAREST;
+
     *outObj = r;
 
     return result;
@@ -230,6 +234,20 @@ int render_set_culling(render* r, render_culling culling) {
     }
 
     r->settings.culling = culling;
+
+    return LSRERR_OK;
+}
+
+int render_set_dither(render* r, render_dither dither) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (dither < RENDER_DITHER_DISABLED || dither >= RENDER_DITHER_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.dither = dither;
 
     return LSRERR_OK;
 }
@@ -333,12 +351,12 @@ int render_set_viewport(render* r, const render_viewport* vp) {
     const int h = vp->height - vp->y;
 
     texture* surface = NULL;
-    if ((result = texture_create(NULL, w, h, &surface)) != LSRERR_OK) {
+    if ((result = texture_create(NULL, w, h, TEXTURE_TYPE_SIMPLE, &surface)) != LSRERR_OK) {
         return result;
     }
 
     texture* depth = NULL;
-    if ((result = texture_create(NULL, w, h, &depth)) != LSRERR_OK) {
+    if ((result = texture_create(NULL, w, h, TEXTURE_TYPE_SIMPLE, &depth)) != LSRERR_OK) {
         texture_release(surface);
         return result;
     }
@@ -349,6 +367,20 @@ int render_set_viewport(render* r, const render_viewport* vp) {
     CopyMemory(&r->viewport, vp, sizeof(render_viewport));
 
     return f32m4_projection(&r->matrixes[RENDER_MATRIX_PROJECTION], w, h, vp->min, vp->max);
+}
+
+int render_set_texture_sampling(render* r, texture_sampling sampling) {
+    if (r == NULL) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    if (sampling < TEXTURE_SAMPLING_NEAREST || sampling >= TEXTURE_SAMPLING_COUNT) {
+        return LSRERR_INVALID_ARGUMENT;
+    }
+
+    r->settings.sampling = sampling;
+
+    return LSRERR_OK;
 }
 
 int render_set_render_target(render* r, surface* s) {
@@ -403,7 +435,7 @@ int render_end(render* r) {
         return LSRERR_INVALID_CALL;
     }
 
-    const int result = surface_load_texture(r->target, r->surface);
+    const int result = surface_load_texture(r->target, r->surface, 0);
 
     r->active = FALSE;
 
@@ -419,8 +451,8 @@ int render_clear(render* r, u32 color) {
         return LSRERR_INVALID_CALL;
     }
 
-    texture_set_color(r->surface, NULL, color);
-    texture_set_color(r->depth, NULL, 0x7F800000); // Positive Infinity
+    texture_set_color(r->surface, NULL, 0, color);
+    texture_set_color(r->depth, NULL, 0, 0x7F800000); // Positive Infinity
 
     return LSRERR_OK;
 }
@@ -587,7 +619,6 @@ int clip_polygon_against_plane(const v* in_vertexes,
 }
 
 int clip_line_against_plane(v* v0, v* v1, frustrum_plane plane) { // TODO API standardization
-
     int result = LSRERR_OK;
 
     f32 d0 = 0.0f, d1 = 0.0f; // TODO Loop
@@ -795,7 +826,7 @@ int fragment_shader_point_stage(render* r,
 
             if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
                 f32 depth = INFINITY;
-                if ((result = texture_get_point_depth(r->depth, x, y, &depth)) != LSRERR_OK) {
+                if ((result = texture_get_point_depth(r->depth, 0, x, y, &depth)) != LSRERR_OK) {
                     return result;
                 }
 
@@ -803,19 +834,9 @@ int fragment_shader_point_stage(render* r,
             }
 
             if (draw) {
-                f32x4 color;
-                CopyMemory(&color, &vertex->color, sizeof(f32x4));
-
-                int xc = 0, yc = 0;
-
-                // Sample texture to get pixel color
-                if (r->current != NULL) {
-                    xc = (int)((f32)(r->current->width - 1) * vertex->uv.x);
-                    yc = (int)((f32)(r->current->height - 1) * vertex->uv.y);
-                }
-
-                if ((result = rasterize_pixel(r, x, y, xc, yc,
-                    vertex->position.z, interpolated_depth, &color)) != LSRERR_OK) {
+                if ((result = rasterize_pixel(r, x, y,
+                    vertex->uv.x, vertex->uv.y, 0.0f,
+                    vertex->position.z, interpolated_depth, &vertex->color)) != LSRERR_OK) {
                     return result;
                 }
             }
@@ -825,7 +846,9 @@ int fragment_shader_point_stage(render* r,
     return result;
 }
 
-int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth, const f32x4* pixel) {
+int rasterize_pixel(render* r,
+    int x, int y, f32 u, f32 v, f32 lod,
+    f32 z, f32 buffer_depth, const f32x4* pixel) {
     if (r == NULL || pixel == NULL) {
         return LSRERR_INVALID_ARGUMENT;
     }
@@ -836,13 +859,8 @@ int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth,
     int result = LSRERR_OK;
 
     if (r->current != NULL) {
-        u32 sample_color = 0;
-        if ((result = texture_get_point_color(r->current, tx, ty, &sample_color)) != LSRERR_OK) {
-            return result;
-        }
-
         f32x4 texture_color;
-        if ((result = f32x4_set_color(&texture_color, sample_color)) != LSRERR_OK) {
+        if ((result = texture_sample(r->current, r->settings.sampling, u, v, lod, &texture_color)) != LSRERR_OK) {
             return result;
         }
 
@@ -855,7 +873,7 @@ int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth,
 
     if (r->settings.fog.mode != RENDER_FOG_NONE) {
         f32 factor = 0.0f;
-        if ((result = render_get_fog_factor(r, fog, &factor)) != LSRERR_OK) {
+        if ((result = render_get_fog_factor(r, z, &factor)) != LSRERR_OK) {
             return result;
         }
 
@@ -864,9 +882,15 @@ int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth,
         }
     }
 
+    if (r->settings.dither == RENDER_DITHER_ENABLED) {
+        if ((result = f32x4_dither(&color, x, y, z)) != LSRERR_OK) {
+            return result;
+        }
+    }
+
     if (r->settings.blending == RENDER_BLENDING_ENABLED) {
         u32 sample_color = 0;
-        if ((result = texture_get_point_color(r->surface, x, y, &sample_color)) != LSRERR_OK) {
+        if ((result = texture_get_point_color(r->surface, 0, x, y, &sample_color)) != LSRERR_OK) {
             return result;
         }
 
@@ -886,9 +910,9 @@ int rasterize_pixel(render* r, int x, int y, int tx, int ty, f32 fog, f32 depth,
     }
 
     // Draw pixel and update depth buffer if needed
-    if ((result = texture_set_point_color(r->surface, x, y, final_color)) == LSRERR_OK) {
+    if ((result = texture_set_point_color(r->surface, 0, x, y, final_color)) == LSRERR_OK) {
         if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
-            if ((result = texture_set_point_depth(r->depth, x, y, depth)) != LSRERR_OK) {
+            if ((result = texture_set_point_depth(r->depth, 0, x, y, buffer_depth)) != LSRERR_OK) {
                 return result;
             }
         }
@@ -1023,6 +1047,15 @@ int fragment_shader_line_stage(render* r,
         const f32 u0_w = v0->uv.x * w0_inv, v0_w = v0->uv.y * w0_inv;
         const f32 u1_w = v1->uv.x * w1_inv, v1_w = v1->uv.y * w1_inv;
 
+        // Calculate level of detail for texturing
+        f32 lod = 0.0f;
+        if (r->current != NULL) {
+            if ((result = texute_get_line_level_of_detail(r->current,
+                x0_f, y0_f, x1_f, y1_f, v0->uv.x, v0->uv.y, v1->uv.x, v0->uv.y, &lod)) != LSRERR_OK) {
+                return result;
+            }
+        }
+
         // Direct Digital Differential Analyzer (DDA) 1D Step Traversal
         for (int i = 0; i <= steps; i++) {
             // Compute current linear interpolation fraction factor 't' along the sequence
@@ -1048,7 +1081,7 @@ int fragment_shader_line_stage(render* r,
             // Depth interpolation & depth check
             if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
                 f32 depth = INFINITY;
-                if ((result = texture_get_point_depth(r->depth, x, y, &depth)) != LSRERR_OK) {
+                if ((result = texture_get_point_depth(r->depth, 0, x, y, &depth)) != LSRERR_OK) {
                     return result;
                 }
 
@@ -1066,18 +1099,11 @@ int fragment_shader_line_stage(render* r,
                 color.g = (w0_color.g + t * (w1_color.g - w0_color.g)) * current_w;
                 color.b = (w0_color.b + t * (w1_color.b - w0_color.b)) * current_w;
 
-                int xc = 0, yc = 0;
+                const f32 u = (u0_w + t * (u1_w - u0_w)) * current_w;
+                const f32 v = (v0_w + t * (v1_w - v0_w)) * current_w;
 
-                // Sample texture to get pixel color
-                if (r->current != NULL) {
-                    const f32 u = (u0_w + t * (u1_w - u0_w)) * current_w;
-                    const f32 v = (v0_w + t * (v1_w - v0_w)) * current_w;
-
-                    xc = (int)((f32)(r->current->width - 1) * u);
-                    yc = (int)((f32)(r->current->height - 1) * v);
-                }
-
-                if ((result = rasterize_pixel(r, x, y, xc, yc, current_z, interpolated_depth, &color)) != LSRERR_OK) {
+                if ((result = rasterize_pixel(r, x, y, u, v, lod,
+                    current_z, interpolated_depth, &color)) != LSRERR_OK) {
                     return result;
                 }
             }
@@ -1299,20 +1325,19 @@ int fragment_shader_triangle_stage(render* r,
         const f32 w1_inv = 1.0f / v1->position.w;
         const f32 w2_inv = 1.0f / v2->position.w;
 
-        // Color interpolation
-        const f32x4 w0_color = { v0->color.a * w0_inv, v0->color.r * w0_inv, v0->color.g * w0_inv, v0->color.b * w0_inv };
-        const f32x4 w1_color = { v1->color.a * w1_inv, v1->color.r * w1_inv, v1->color.g * w1_inv, v1->color.b * w1_inv };
-        const f32x4 w2_color = { v2->color.a * w2_inv, v2->color.r * w2_inv, v2->color.g * w2_inv, v2->color.b * w2_inv };
-
-        // Texture coordinate interpolation
-        const f32 u0_w = v0->uv.x * w0_inv, v0_w = v0->uv.y * w0_inv;
-        const f32 u1_w = v1->uv.x * w1_inv, v1_w = v1->uv.y * w1_inv;
-        const f32 u2_w = v2->uv.x * w2_inv, v2_w = v2->uv.y * w2_inv;
-
         // Depth interpolation
         const f32 z0_w = v0->position.z * w0_inv;
         const f32 z1_w = v1->position.z * w1_inv;
         const f32 z2_w = v2->position.z * w2_inv;
+
+        // Calculate level of detail for texturing
+        f32 lod = 0.0f;
+        if (r->current != NULL) {
+            if ((result = texute_get_triangle_level_of_detail(r->current,
+                x0, y0, x1, y1, x2, y2, v0->uv.x, v0->uv.y, v1->uv.x, v1->uv.y, v2->uv.x, v2->uv.y, &lod)) != LSRERR_OK) {
+                return result;
+            }
+        }
 
         // Loop over every pixel in the bounding box
         for (int y = start_y; y <= end_y; y++) {
@@ -1359,7 +1384,7 @@ int fragment_shader_triangle_stage(render* r,
                     // Depth interpolation & depth check
                     if (r->settings.depth != RENDER_DEPTH_BUFFER_NONE) {
                         f32 depth = INFINITY;
-                        if ((result = texture_get_point_depth(r->depth, x, y, &depth)) != LSRERR_OK) {
+                        if ((result = texture_get_point_depth(r->depth, 0, x, y, &depth)) != LSRERR_OK) {
                             return result;
                         }
 
@@ -1370,25 +1395,27 @@ int fragment_shader_triangle_stage(render* r,
                     }
 
                     if (draw) {
-                        // Perspective correct attribute interpolation
+                        // Color interpolation
+                        const f32x4 w0_color = { v0->color.a * w0_inv, v0->color.r * w0_inv, v0->color.g * w0_inv, v0->color.b * w0_inv };
+                        const f32x4 w1_color = { v1->color.a * w1_inv, v1->color.r * w1_inv, v1->color.g * w1_inv, v1->color.b * w1_inv };
+                        const f32x4 w2_color = { v2->color.a * w2_inv, v2->color.r * w2_inv, v2->color.g * w2_inv, v2->color.b * w2_inv };
+
+                        // Texture coordinate interpolation
+                        const f32 u0_w = v0->uv.x * w0_inv, v0_w = v0->uv.y * w0_inv;
+                        const f32 u1_w = v1->uv.x * w1_inv, v1_w = v1->uv.y * w1_inv;
+                        const f32 u2_w = v2->uv.x * w2_inv, v2_w = v2->uv.y * w2_inv;
+
+                        // Perspective correct color interpolation
                         f32x4 color;
                         color.a = (w0 * w0_color.a + w1 * w1_color.a + w2 * w2_color.a) * current_w;
                         color.r = (w0 * w0_color.r + w1 * w1_color.r + w2 * w2_color.r) * current_w;
                         color.g = (w0 * w0_color.g + w1 * w1_color.g + w2 * w2_color.g) * current_w;
                         color.b = (w0 * w0_color.b + w1 * w1_color.b + w2 * w2_color.b) * current_w;
 
-                        int xc = 0, yc = 0;
+                        const f32 u = (w0 * u0_w + w1 * u1_w + w2 * u2_w) * current_w;
+                        const f32 v = (w0 * v0_w + w1 * v1_w + w2 * v2_w) * current_w;
 
-                        // Sample texture to get pixel color
-                        if (r->current != NULL) {
-                            const f32 u = (w0 * u0_w + w1 * u1_w + w2 * u2_w) * current_w;
-                            const f32 v = (w0 * v0_w + w1 * v1_w + w2 * v2_w) * current_w;
-
-                            xc = (int)((f32)(r->current->width - 1) * u);
-                            yc = (int)((f32)(r->current->height - 1) * v);
-                        }
-
-                        if ((result = rasterize_pixel(r, x, y, xc, yc, current_z, interpolated_depth, &color)) != LSRERR_OK) {
+                        if ((result = rasterize_pixel(r, x, y, u, v, current_z, current_w, interpolated_depth, &color)) != LSRERR_OK) {
                             return result;
                         }
                     }

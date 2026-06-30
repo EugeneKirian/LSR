@@ -14,7 +14,7 @@ typedef struct glyph {
 } glyph;
 
 struct font {
-    texture texture;
+    texture* texture;
     TEXTMETRICA metrics;
     glyph glyphs[FONT_MAX_GLYPH_COUNT];
     u32 front, back;
@@ -35,15 +35,6 @@ static int font_allocate(const char* name, font** outObj) {
     }
 
     ZeroMemory(f, sizeof(font));
-
-    const size_t length = strlen(name) + 1;
-    f->texture.name = (char*)malloc(length);
-    if (f->texture.name == NULL) {
-        font_release(f);
-        return LSRERR_OUT_OF_MEMORY;
-    }
-
-    strcpy(f->texture.name, name);
 
     *outObj = f;
 
@@ -105,23 +96,20 @@ int font_create(const char* name, int size, int bold, u32 front, u32 back, font*
     }
 
     // Calculate area needed for the atlas
-    f->texture.width = f->texture.height = power_of_two_round_up(
-        (u32)(sqrtf((f32)((max_width + FONT_MAX_PADDING_SIZE)
+    const int dims =
+        power_of_two_round_up((u32)(sqrtf((f32)((max_width + FONT_MAX_PADDING_SIZE)
             * (max_height + FONT_MAX_PADDING_SIZE) * FONT_MAX_GLYPH_COUNT)) + 1.0f));
 
     // Allocate font atlas texture
-    const size_t atlas_size = f->texture.width * f->texture.height * sizeof(u32);
-    f->texture.data = (u8*)malloc(atlas_size);
-    if (f->texture.data == NULL) {
-        result = LSRERR_OUT_OF_MEMORY;
-        goto error;
+    if ((result = texture_create(name, dims, dims, TEXTURE_TYPE_SIMPLE, &f->texture)) != LSRERR_OK) {
+        font_release(f);
+        return result;
     }
 
     // Set background color for the font atlas texture
-    for (int y = 0; y < f->texture.height; y++) {
-        u32* row = (u32*)(f->texture.data + (y * f->texture.width) * sizeof(u32));
-        for (int x = 0; x < f->texture.width; x++) {
-            row[x] = back;
+    for (int i = 0; i < f->texture->level_count; i++) {
+        if ((result = texture_set_color(f->texture, NULL, i, back)) != LSRERR_OK) {
+            return result;
         }
     }
 
@@ -144,13 +132,13 @@ int font_create(const char* name, int size, int bold, u32 front, u32 back, font*
             current_x += max_width + FONT_MAX_PADDING_SIZE;
 
             // Check if we need to move to next row
-            if (current_x + max_width > (u32)f->texture.width) {
+            if (current_x + max_width > (u32)f->texture->levels[0].width) {
                 current_x = FONT_MAX_PADDING_SIZE;
                 current_y += max_height + FONT_MAX_PADDING_SIZE;
             }
 
             // Check if got outside the atlas boundaries
-            if (current_x >= f->texture.width || current_y >= f->texture.height) {
+            if (current_x >= f->texture->levels[0].width || current_y >= f->texture->levels[0].height) {
                 result = LSRERR_INTERNAL_ERROR;
                 goto error;
             }
@@ -180,8 +168,8 @@ int font_create(const char* name, int size, int bold, u32 front, u32 back, font*
                     u32 pitch = (gm.gmBlackBoxX + 3) & ~3;
                     // Convert gray-scale transparency gradient (0 to 64) to the ARGB colors
                     for (u32 y = 0; y < gm.gmBlackBoxY; y++) {
-                        u32* pixels = (u32*)(f->texture.data
-                            + (f->glyphs[i].y + y) * f->texture.width * sizeof(u32));
+                        u32* pixels = (u32*)(f->texture->levels[0].data
+                            + (f->glyphs[i].y + y) * f->texture->levels[0].width * sizeof(u32));
 
                         for (u32 x = 0; x < gm.gmBlackBoxX; x++) {
                             const u32 index = y * gm.gmBlackBoxX + x;
@@ -227,12 +215,8 @@ error:
 
 void font_release(font* f) {
     if (f != NULL) {
-        if (f->texture.name != NULL) {
-            free(f->texture.name);
-        }
-
-        if (f->texture.data != NULL) {
-            free(f->texture.data);
+        if (f->texture != NULL) {
+            texture_release(f->texture);
         }
 
         free(f);
@@ -244,7 +228,7 @@ int font_get_texture(const font* f, const texture** t) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    *t = &f->texture;
+    *t = f->texture;
 
     return LSRERR_OK;
 }
@@ -265,8 +249,8 @@ int font_get_item(const font* f, u32 c, fqd* quad) {
     const f32 miny = (f32)g->y;
     const f32 maxy = (f32)(g->y + g->height);
 
-    const f32 tw = (f32)f->texture.width;
-    const f32 th = (f32)f->texture.height;
+    const f32 tw = (f32)f->texture->width;
+    const f32 th = (f32)f->texture->height;
 
     quad->x = g->bearingX;
     quad->y = g->bearingY;

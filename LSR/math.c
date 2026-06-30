@@ -80,10 +80,10 @@ int f32x4_get_color(const f32x4* value, u32* color) {
         return LSRERR_INVALID_ARGUMENT;
     }
 
-    const u32 a = (u32)floorf(value->a * 255.0f);
-    const u32 r = (u32)floorf(value->r * 255.0f);
-    const u32 g = (u32)floorf(value->g * 255.0f);
-    const u32 b = (u32)floorf(value->b * 255.0f);
+    const u32 a = (u32)clampf(floorf(value->a * 255.0f), 0.0f, 255.0f);
+    const u32 r = (u32)clampf(floorf(value->r * 255.0f), 0.0f, 255.0f);
+    const u32 g = (u32)clampf(floorf(value->g * 255.0f), 0.0f, 255.0f);
+    const u32 b = (u32)clampf(floorf(value->b * 255.0f), 0.0f, 255.0f);
 
     *color = (a << 24) | (r << 16) | (g << 8) | b;
 
@@ -99,6 +99,31 @@ int f32x4_set_color(f32x4* value, u32 color) {
     value->r = ((color >> 16) & 0xFF) / 255.0f;
     value->g = ((color >> 8) & 0xFF) / 255.0f;
     value->b = ((color >> 0) & 0xFF) / 255.0f;
+
+    return LSRERR_OK;
+}
+
+int f32x4_dither(f32x4* color, int x, int y, f32 depth) {
+    if (color == NULL) {
+        return LSRERR_OUT_OF_MEMORY;
+    }
+
+    // Calculate dither intensity based on distance
+    f32 intensity = clampf(1.0f - (depth / 5.0f), 0.0f, 5.0f);
+
+    // Quadratic falloff for smoother transition
+    intensity = intensity * intensity;
+
+    // Only apply dithering when intensity is significant
+    if (intensity > 0.05f) {
+        // Generate noise value for this pixel position
+        const f32 amount = 0.02f * intensity
+            * ((f32)(noise(x, y) % 256) - 128.0f) / 128.0f; // Range: -1.0 to 1.0
+
+        color->r += amount;
+        color->g += amount;
+        color->b += amount;
+    }
 
     return LSRERR_OK;
 }
